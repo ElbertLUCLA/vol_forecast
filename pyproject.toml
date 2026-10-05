@@ -4,4 +4,37 @@ version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "arch>=8.0.0",
+    "jupyter>=1.1.1",
+    "matplotlib>=3.11.2",
+    "numpy>=2.5.3",
+    "optuna>=3.5",
+    "pandas>=3.0.6",
+    "pandas-market-calendars>=5.5.0",
+    "pyarrow>=25.0.1",
+    "python-dotenv>=1.2.4",
+    "pyyaml>=6.0.3",
+    "requests>=2.34.2",
+    "statsmodels>=0.15.0",
+    "tqdm>=4.70.1",
+    "xgboost>=2.0,<4",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/volforecast"]
+
+[tool.pytest.ini_options]
+filterwarnings = [
+    # booster=gblinear is deprecated in xgboost 3.x but still supported; pinned <4.
+    "ignore:.*gblinear.* is deprecated:UserWarning",
+]

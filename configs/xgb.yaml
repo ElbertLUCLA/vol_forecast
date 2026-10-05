@@ -1,0 +1,79 @@
+# XGBoost realized-variance model (XGBoost_implementation.md).
+# Dates, cutoffs, horizons and the feature-store / split / forecast paths come
+# from the pipeline's config.yaml, so this file only holds model settings.
+
+events: [covid, bear2022]
+
+# Must match volforecast.adapters.FEATURE_SETS so HAR and XGBoost get identical inputs.
+featuresets:
+  base: [log_rv_d, log_rv_w, log_rv_m]
+  ext: [log_rv_d, log_rv_w, log_rv_m, log_rs_neg, log_rs_neg_w, log_rs_neg_m, jump_pct]
+  # Robustness only (CJX-style). log_vix is not in the feature store yet (Bloomberg pull pending).
+  ext_x: [log_rv_d, log_rv_w, log_rv_m, log_rs_neg, log_rs_neg_w, log_rs_neg_m, jump_pct,
+          ret_cc, ret_overnight, mom]
+default_featuresets: [base, ext]
+
+horizons: [1, 5, 22]
+boosters: [gbtree, gblinear]
+
+# Random-walk benchmark for sanity check 6, per horizon.
+naive_feature: {1: log_rv_d, 5: log_rv_w, 22: log_rv_m}
+
+optuna:
+  n_trials: 100
+  seed: 42
+  multivariate: true
+  storage: models/xgb/optuna.db
+
+# Teller et al. (2022) Table 4. type: float -> U[low, high], int -> int[low, high].
+search_spaces:
+  default:
+    gbtree:
+      learning_rate: {type: float, low: 0.1, high: 0.3}
+      reg_alpha: {type: float, low: 0.0, high: 1.0}
+      reg_lambda: {type: float, low: 0.0, high: 1.0}
+      max_depth: {type: int, low: 1, high: 20}
+      n_estimators: {type: int, low: 1, high: 60}
+      gamma: {type: float, low: 0.0, high: 1.0}
+      colsample_bytree: {type: float, low: 0.5, high: 1.0}
+    gblinear:
+      learning_rate: {type: float, low: 0.1, high: 0.3}
+      reg_alpha: {type: float, low: 0.0, high: 1.0}
+      reg_lambda: {type: float, low: 0.0, high: 1.0}
+      n_estimators: {type: int, low: 1, high: 60}
+  # Optional sensitivity check (section 4.2): more trees with early stopping on the val block.
+  wide:
+    gbtree:
+      learning_rate: {type: float, low: 0.01, high: 0.3, log: true}
+      reg_alpha: {type: float, low: 0.0, high: 1.0}
+      reg_lambda: {type: float, low: 0.0, high: 1.0}
+      max_depth: {type: int, low: 1, high: 20}
+      n_estimators: {type: int, low: 1, high: 500}
+      gamma: {type: float, low: 0.0, high: 1.0}
+      colsample_bytree: {type: float, low: 0.5, high: 1.0}
+      min_child_weight: {type: float, low: 1.0, high: 20.0}
+    gblinear:
+      learning_rate: {type: float, low: 0.1, high: 0.3}
+      reg_alpha: {type: float, low: 0.0, high: 1.0}
+      reg_lambda: {type: float, low: 0.0, high: 1.0}
+      n_estimators: {type: int, low: 1, high: 60}
+    early_stopping_rounds: 20
+
+fixed_params:
+  objective: reg:squarederror
+  tree_method: hist          # gbtree only
+  updater: coord_descent     # gblinear only
+  feature_selector: cyclic   # gblinear only (deterministic)
+  n_jobs: -1                 # -1 = all cores
+
+refit:
+  seeds: [42, 43, 44, 45, 46]  # gbtree seed ensemble; gblinear uses only the first
+
+train_tail_days: 63
+
+explain:
+  contrib_plot_horizons: [5, 22]
+
+paths:
+  models_dir: models/xgb
+  reports_dir: reports/xgb
