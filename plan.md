@@ -21,7 +21,7 @@
 | HAR | Linear RV model | `statsmodels` OLS | log RV daily/weekly/monthly (+ extended set) |
 | XGBoost | Classical ML | `xgboost` + `optuna` (TPE), following Teller et al. | Tabular HAR features (+ extended set) |
 | HARNet | Deep learning (dilated CNN) | github.com/mdsunivie/HARNet (TF), or a PyTorch rewrite | Raw daily RV series (+ RS⁻ and signed jump for the extended version) |
-| Multi-Transformer | Deep learning (attention) | github.com/EduardoRamosP/MultiTransformer (Keras), as a reference | 10-lag sequences of the feature set |
+| Mamba (+ LSTM control) | Deep learning (selective state space / recurrent) | `transformers` MambaModel, PyTorch (AMD GPU via ROCm) | Raw daily log RV (+ log RS⁻, jump) over a 22–126-day lookback |
 
 **Feature strategy (decided):** two tiers.
 
@@ -175,7 +175,7 @@ Everything indexed by trading day *t*. **Features use information up to the clos
 
 **Optional / robustness:** `ret_cc`, `ret_overnight`, `mom` = RV_w − RV_m, `log_medrv`, `log_vix` (Bloomberg).
 
-**Inputs for the original Multi-Transformer specification** (to reproduce or compare against the paper's setup): `ret_cc` and the 5-day rolling standard deviation of returns.
+**Inputs for the original Multi-Transformer specification** (kept in the store, unused since the Multi-Transformer was replaced by Mamba): `ret_cc` and the 5-day rolling standard deviation of returns.
 
 **Targets** (direct forecasting, as in the XGBoost paper), for h ∈ {1, 5, 22}:
 - `y_h{h}` = ln( (1/h) Σᵢ₌₁ʰ RV_{t+i} ), with the raw-scale version `rv_h{h}` also stored for QLIKE and MSE on the variance scale.
@@ -211,7 +211,7 @@ One feature store, with thin functions that serve each model what it expects:
 - `garch_view(split)` → series of `ret_cc_pct` for the training range, plus the out-of-sample dates for rolling 1/5/22-step variance forecasts with frozen parameters.
 - `tabular_view(split, featureset, h)` → `X`, `y` DataFrames for HAR and XGBoost.
 - `harnet_view(split, featureset)` → the raw daily `log_rv` (and `log_rs_neg`, `jump_pct`) series. HARNet builds its own 5/20/(40/80)-day aggregations inside the network, so it gets the **daily series, not the precomputed averages**.
-- `sequence_view(split, featureset, lags=10)` → a 3-D array (samples × 10 lags × features) for the Multi-Transformer.
+- `sequence_view(split, featureset, lags=10)` → a 3-D array (samples × lags × features) for sequence models. (Mamba/LSTM build their own raw-daily windows in `models/seq/data.py`.)
 
 This keeps "the same information set" true across models by construction, which is an argument you'll want to make in the Methods chapter.
 
@@ -225,7 +225,7 @@ This keeps "the same information set" true across models by construction, which 
 2. **Early-warning lift:** each model's forecast divided by *its own* average forecast over the last 3 months of training. Reported as the date the ratio first passes, e.g., 1.5× or 2×, relative to the market peak. This gives a lead time in days.
 3. **Under-prediction at the onset:** cumulative forecast error over the first 10 days of the event window.
 4. **False alarms:** how often the same threshold is crossed during calm out-of-sample periods. Without this, lead-time results can't be interpreted.
-5. *(Optional)* **VaR backtest:** 1-day 99% VaR exceedances during the event window, using each model's variance forecast. This connects to the Multi-Transformer paper's risk-management framing.
+5. *(Optional)* **VaR backtest:** 1-day 99% VaR exceedances during the event window, using each model's variance forecast. This connects to the risk-management framing of the volatility-forecasting literature.
 
 The pipeline doesn't compute these, but it must output **dated, out-of-sample forecasts for every model** (`forecasts/{event}/{model}_{featureset}_h{h}.parquet`, with columns `date, forecast, realized`). That fixed schema lets a single evaluation script handle all models.
 
@@ -271,5 +271,6 @@ The pipeline doesn't compute these, but it must output **dated, out-of-sample fo
 - Andersen, Dobrev & Schaumburg (2012): medRV
 - Reisenhofer, Bayer & Hautsch (2022): HARNet (`harnet.pdf`, §6 for extended inputs)
 - Teller, Pigorsch & Pigorsch (2022): XGBoost RV forecasting (`rv_xgboost.pdf`)
-- Ramos-Pérez, Alonso-González & Núñez-Velázquez (2021): Multi-Transformer (`multi_transformer.pdf`)
+- Ramos-Pérez, Alonso-González & Núñez-Velázquez (2021): Multi-Transformer (`multi_transformer.pdf`; considered, replaced by Mamba)
+- Gu & Dao (2023): Mamba
 - Massive API docs: Custom Bars endpoint, `api.massive.com/v2/aggs/...`

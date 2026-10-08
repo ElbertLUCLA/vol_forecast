@@ -100,7 +100,7 @@ exp(E[log RV]) under-predicts E[RV], because of Jensen's inequality. For a study
 | | COVID-19 | 2022 bear |
 |---|---|---|
 | Train + val ends (cutoff) | 2019-12-31 | 2021-09-30 |
-| Validation block | last 10% of pre-cutoff rows: 2018-05-29 → 2019-12-31 | 2019-12-23 → 2021-09-30 (contains COVID; see §11) |
+| Validation block | last 10% of pre-cutoff rows: 2018-05-29 → 2019-12-31 | 2021-01-04 → 2021-09-30 (explicit window; train runs through 2020 so COVID is in training. The original 2019-12 → 2021-09 block contained COVID and inflated the smearing factor, see PROJECT_CONTEXT §9d) |
 | Forecast period | 2020-01-02 → 2020-06-30 | 2021-10-01 → 2023-03-31 |
 
 **Purging:** any row whose target window [t+1, t+h] crosses a boundary is dropped:
@@ -263,7 +263,7 @@ Run these before trusting any result:
 
 ## 11. Thesis-specific design notes
 
-- **The 2022 validation block contains COVID.** That makes the 2022 tuning objective dominated by an extreme period, which may push toward simpler models. It's realistic for a forecaster in late 2021. As a robustness check, re-tune with the validation block ending 2020-01-31, then train → refit as usual. Report only if the results differ.
+- **(Resolved 2026-10-08; see PROJECT_CONTEXT §9d.) The original 2022 validation block contained COVID.** That makes the 2022 tuning objective dominated by an extreme period, which may push toward simpler models. It's realistic for a forecaster in late 2021. As a robustness check, re-tune with the validation block ending 2020-01-31, then train → refit as usual. Report only if the results differ.
 - **Equal tuning effort:** 100 TPE trials matches what the deep models should get. Record wall-clock time per cell for the computational-cost table.
 - **What XGBoost adds to the story:**
   - Does non-linearity help *early warning*, even if it doesn't help average accuracy at h = 5/22, as the paper found?

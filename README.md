@@ -1,7 +1,7 @@
 # deep-learning-volatility-forecast
 
 Data pipeline and models for a MASDS thesis comparing GARCH, HAR, XGBoost, HARNet
-and Multi-Transformer forecasts of SPY realized volatility around the COVID-19
+and Mamba forecasts of SPY realized volatility around the COVID-19
 crash and the 2022 bear market. Full design rationale is in [`plan.md`](plan.md).
 
 ## Setup
@@ -54,7 +54,7 @@ duplicating logic:
 - `garch_view` — return series for `arch`
 - `tabular_view` — X/y DataFrames for HAR (statsmodels) and XGBoost
 - `harnet_view` — raw daily RV (+ RS-, signed jump) series for HARNet
-- `sequence_view` — lagged 3-D arrays for the Multi-Transformer
+- `sequence_view` — lagged 3-D arrays for sequence models
 
 Run `uv run pytest` to smoke-test that GARCH(1,1) and HAR-OLS actually fit on
 the transformed output (requires the pipeline to have been run at least once).
@@ -87,9 +87,49 @@ Each cell writes:
 - Optuna studies in `models/xgb/optuna.db`. Studies resume, so re-running tops each one up to `n_trials`.
 - A per-cell run log in `models/xgb/run_log.csv`
 
+## HARNet (PyTorch)
+
+A PyTorch port of Reisenhofer, Bayer & Hautsch (2022), adapted to the event design.
+The code is in `src/volforecast/models/harnet/` and the settings are in `configs/harnet.yaml`.
+The TensorFlow reference in `HARNet/` doesn't run on the current stack (Keras 3, NumPy 2).
+The model has about 10 weights, so it runs on the CPU build of PyTorch. A GPU (or ROCm) build would not make it faster.
+
+```bash
+uv run python -m volforecast.models.harnet.run_all                        # 2 events x {base, ext} x h {1, 5, 22}
+uv run python -m volforecast.models.harnet.run_all --event covid --fs base --h 1 --max-iterations 2000
+```
+
+Each cell:
+
+- initializes from the OLS HAR(1, 5, 20) fit on the direct target `rv_h{h}`
+- trains with Adam and QLIKE on 4 windows × 5 labels per step, with 5 seeds trained together as one vectorized model
+- picks the number of iterations on validation QLIKE; iteration 0 is the HAR itself
+- refits on all pre-cutoff rows for that many iterations, then freezes
+
+Forecasts go to the shared schema in `data/processed/forecasts/{event}/harnet20_{fs}_h{h}.parquet`, and the frozen model to `models/harnet/{event}/{model}/`.
+
+## Baselines, sequence models and evaluation
+
+```bash
+uv run python -m volforecast.models.har.run_all       # log-HAR (OLS + smearing), 12 cells
+uv run python -m volforecast.models.garch.run_all     # GARCH(1,1)-t, 6 cells
+uv run python -m volforecast.models.seq.run_all --arch lstm --device cpu --threads 2   # LSTM control (CPU)
+.venv-rocm/Scripts/python -m volforecast.models.seq.run_all --arch mamba             # Mamba (AMD GPU)
+uv run jupyter nbconvert --to notebook --execute --inplace notebooks/02_model_comparison.ipynb
+```
+
+- **Mamba** (`src/volforecast/models/seq/`) runs on the RX 7900 XTX through a separate environment, `.venv-rocm`, which has
+  AMD's Windows PyTorch 2.9.1 + ROCm 7.2.1 wheels; setup steps are in `PROJECT_CONTEXT.md` §3. It also runs on CPU, just slower.
+  The runner skips finished cells, so it resumes after a crash.
+- **Forecast range.** Every model forecasts from its cutoff through a calm window after the event
+  (`calm_window` in `config.yaml`). That window is the false-alarm reference.
+- **Re-forecasting.** `--forecast-only` (XGBoost, HAR) re-forecasts from the frozen models without refitting.
+- **Evaluation.** `src/volforecast/evaluation.py` computes lift, lead time, onset coverage and escalation, 2022 tracking,
+  alarm skill (hit rate, false-alarm rate, Peirce score) and DM tests. `notebooks/02_model_comparison.ipynb` shows the results,
+  and `reports/eval/` gets the tables and figures.
+
 ## Reference repos
 
-`HARNet/` and `MultiTransformer/` are the original authors' repos (TensorFlow /
-Keras), kept as read-only references for the adapter contracts and are
-git-ignored from this repo. They are likely candidates for a PyTorch rewrite
-later — the adapters above don't assume either framework.
+`HARNet/` is the original authors' TensorFlow repo, kept read-only and git-ignored. It doesn't run on
+the current stack, which is why `src/volforecast/models/harnet/` is a PyTorch port. The Multi-Transformer
+reference repo was removed when Mamba replaced that model.

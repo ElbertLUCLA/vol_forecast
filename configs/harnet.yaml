@@ -1,0 +1,41 @@
+# HARNet (Reisenhofer, Bayer & Hautsch 2022), PyTorch port adapted to the event design.
+# Dates, cutoffs, horizons and data paths come from config.yaml. See PROJECT_CONTEXT.md section 6.4.
+
+events: [covid, bear2022]
+
+# Raw daily series fed to the network, scaled by the fixed MinMax map below.
+# base -> HARNet (1 conv channel); ext -> HARNetSVJ (RV and RS- averaged, signed jump daily only).
+featuresets:
+  base: {variant: HARNet, channels: [rv]}
+  ext: {variant: HARNetSVJ, channels: [rv, rs_neg, delta_j2]}
+default_featuresets: [base, ext]
+
+horizons: [1, 5, 22]
+
+# Aggregation periods; each must be a multiple of the previous one, so 20 (not 22) is the monthly period.
+lags: [1, 5, 20]
+
+# Paper: fixed linear map 0 -> 0 and 1e-3 -> 1, applied to every channel (no fitting, no leakage).
+scaler: {min: 0.0, max: 0.001}
+
+train:
+  learning_rate: 1.0e-4   # Adam, paper Table 1
+  batch_size: 4           # random windows per iteration
+  label_length: 5         # consecutive labels per window
+  loss: QLIKE
+  # The paper runs 10,000 iterations on ~1,000 labels (~200 epochs). Here train has ~3,500-4,000
+  # labels, so we allow up to 100,000 (the 40,000 first run was binding) and pick the iteration count on validation QLIKE
+  # (iteration 0 = the OLS-initialized HAR, so training can only be chosen if it helps).
+  max_iterations: 100000
+  eval_every: 250
+  patience_evals: 40      # stop when the seed-averaged val QLIKE hasn't improved for this many evals
+  clip_max: 1000.0        # upper prediction clip in scaled units (paper)
+  num_threads: 1          # the model is tiny; one thread is fastest
+
+seeds: [42, 43, 44, 45, 46]  # batch-sampling seeds; the forecast is the seed average
+
+train_tail_days: 63
+
+paths:
+  models_dir: models/harnet
+  reports_dir: reports/harnet

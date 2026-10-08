@@ -3,6 +3,7 @@
 Usage:
     uv run python -m volforecast.models.xgb.run_all                      # full grid (24 cells)
     uv run python -m volforecast.models.xgb.run_all --event covid --fs base --h 1 --booster gbtree --n-trials 10
+    uv run python -m volforecast.models.xgb.run_all --forecast-only                    # re-forecast frozen models
     uv run python -m volforecast.models.xgb.run_all --fs ext_x --tag ext_x             # robustness: CJX-style set
     uv run python -m volforecast.models.xgb.run_all --space wide --booster gbtree --tag wide
     uv run python -m volforecast.models.xgb.run_all --event bear2022 \\
@@ -38,6 +39,7 @@ def run_cell(
     space_name: str = "default",
     val_window: tuple[str, str] | None = None,
     plots: bool = True,
+    forecast_only: bool = False,
 ) -> dict:
     paths = cfg["paths"]
     model_dir = Path(paths["models_dir"]) / cell.event / cell.name
@@ -45,11 +47,16 @@ def run_cell(
                           cfg["train_tail_days"], val_window)
 
     t0 = time.perf_counter()
-    study = tune_cell(cell, frames, cfg, n_trials, space_name)
-    hp, tuning_info = best_hyperparameters(study)
-    t1 = time.perf_counter()
-    fitted = refit_cell(cell, frames, hp, cfg, model_dir, tuning_info)
-    t2 = time.perf_counter()
+    if forecast_only:
+        # Re-forecast from the frozen model (e.g. after the forecast range was extended); no fitting.
+        tuning_info = load_fitted(cell, model_dir).params.get("tuning", {})
+        t1 = t2 = time.perf_counter()
+    else:
+        study = tune_cell(cell, frames, cfg, n_trials, space_name)
+        hp, tuning_info = best_hyperparameters(study)
+        t1 = time.perf_counter()
+        refit_cell(cell, frames, hp, cfg, model_dir, tuning_info)
+        t2 = time.perf_counter()
 
     # Forecasting uses only what refit_cell froze to disk.
     frozen = load_fitted(cell, model_dir)
@@ -99,6 +106,8 @@ def parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("--tag", default="", help="suffix for model names (robustness variants)")
     p.add_argument("--config", help="path to an alternative xgb.yaml")
     p.add_argument("--no-plots", action="store_true")
+    p.add_argument("--forecast-only", action="store_true",
+                   help="re-forecast from the frozen models without tuning or refitting")
     return p.parse_args(argv)
 
 
@@ -126,9 +135,13 @@ def main(argv=None) -> None:
     for i, cell in enumerate(cells, 1):
         logger.info("[%d/%d] %s / %s", i, len(cells), cell.event, cell.name)
         rows.append(run_cell(cell, features_df, splits[cell.event], cfg, args.n_trials, args.space,
-                             tuple(args.val_window) if args.val_window else None, not args.no_plots))
+                             tuple(args.val_window) if args.val_window else None, not args.no_plots,
+                             args.forecast_only))
 
     models_dir = Path(cfg["paths"]["models_dir"])
+    if args.forecast_only:
+        logger.info("Done (forecast only; run log unchanged).")
+        return
     log_path = models_dir / "run_log.csv"
     new = pd.DataFrame(rows).assign(finished=pd.Timestamp.now().isoformat(timespec="seconds"))
     if log_path.exists():

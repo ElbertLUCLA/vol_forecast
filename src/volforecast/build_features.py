@@ -71,7 +71,7 @@ def build_features(measures: pd.DataFrame, cfg: dict) -> pd.DataFrame:
     df["mom"] = rv_w - rv_m
     df["log_medrv"], _ = _floor_and_log(df["medrv"], floor_pct, "medrv")
 
-    # --- Original Multi-Transformer spec inputs ---
+    # --- Original Multi-Transformer spec inputs (kept; that model was replaced by Mamba) ---
     df["ret_cc_roll_std_5"] = df["ret_cc"].rolling(window=w_week, min_periods=w_week).std()
 
     # --- Targets (direct multi-step forecasting) ---

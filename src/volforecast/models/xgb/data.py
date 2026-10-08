@@ -9,7 +9,7 @@ Segments (XGBoost_implementation.md section 4.1):
   train  : [train.start, val.start), purged so target_end < val.start
   val    : [val.start, val.end],     purged so target_end <= val.end
   refit  : [train.start, cutoff],    purged so target_end <= cutoff
-  oos    : [pre_event.start, post_event.end], not purged (target may be NaN)
+  oos    : [pre_event.start, calm.end (or post_event.end)], not purged (target may be NaN)
   tail   : last `train_tail_days` trading days <= cutoff (in-sample fitted)
 """
 from __future__ import annotations
@@ -19,7 +19,7 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
-OOS_SEGMENTS = ("pre_event", "event", "post_event")
+from volforecast.models.schema import oos_range, sample_labels
 
 
 @dataclass
@@ -113,14 +113,6 @@ def _frame(df: pd.DataFrame, cols: list[str], h: int, require_target: bool) -> F
     return Frame(clean, list(cols), h)
 
 
-def oos_sample_labels(dates: pd.DatetimeIndex, split: dict) -> pd.Series:
-    labels = pd.Series(pd.NA, index=dates, dtype="string")
-    for seg in OOS_SEGMENTS:
-        start, end = pd.Timestamp(split[seg]["start"]), pd.Timestamp(split[seg]["end"])
-        labels[(dates >= start) & (dates <= end)] = seg
-    return labels
-
-
 def build_frames(
     features_df: pd.DataFrame,
     split: dict,
@@ -163,8 +155,8 @@ def build_frames(
     tail = pre_cutoff.tail(train_tail_days).copy()
     tail["sample"] = "train_tail"
 
-    oos = _rows(df, split["pre_event"]["start"], split["post_event"]["end"]).dropna(subset=features).copy()
-    oos["sample"] = oos_sample_labels(pd.DatetimeIndex(oos["date"]), split).to_numpy()
+    oos = _rows(df, *oos_range(split)).dropna(subset=features).copy()
+    oos["sample"] = sample_labels(oos["date"], split)
 
     return CellFrames(
         train=_frame(train, features, h, require_target=True),

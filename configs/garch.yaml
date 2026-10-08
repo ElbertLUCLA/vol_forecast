@@ -1,0 +1,7 @@
+# GARCH(1,1) baseline on close-to-close returns (Bollerslev 1986). See PROJECT_CONTEXT.md section 6.1.
+events: [covid, bear2022]
+horizons: [1, 5, 22]
+spec: {mean: Constant, vol: GARCH, p: 1, o: 0, q: 1, dist: t}
+train_tail_days: 63
+paths:
+  models_dir: models/garch

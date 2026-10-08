@@ -71,7 +71,8 @@ def _mark_event(ax, split: dict) -> None:
             va="top", fontsize=8, color=INK_MUTED)
 
 
-def plot_forecast(forecasts: pd.DataFrame, split: dict, ceiling_var: float | None, title: str, path: Path) -> None:
+def plot_forecast(forecasts: pd.DataFrame, split: dict, ceiling_var: float | None, title: str, path: Path,
+                  forecast_label: str = "forecast (smeared)") -> None:
     df = forecasts[forecasts["sample"] != "train_tail"]
     fig, ax = plt.subplots(figsize=(9, 4))
     _style(ax)
@@ -80,7 +81,7 @@ def plot_forecast(forecasts: pd.DataFrame, split: dict, ceiling_var: float | Non
         ax.fill_between(df["date"], df["forecast_var_seed_min"], df["forecast_var_seed_max"],
                         color=SERIES[0], alpha=0.2, linewidth=0, label="seed range")
     ax.plot(df["date"], df["realized_var"], color=INK_MUTED, linewidth=1.2, label="realized")
-    ax.plot(df["date"], df["forecast_var"], color=SERIES[0], linewidth=2, label="forecast (smeared)")
+    ax.plot(df["date"], df["forecast_var"], color=SERIES[0], linewidth=2, label=forecast_label)
     if ceiling_var is not None:
         ax.axhline(ceiling_var, color=SERIES[1], linewidth=1.5, linestyle="--", label="tree ceiling")
     ax.set_yscale("log")

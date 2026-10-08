@@ -10,7 +10,6 @@ Smearing: S = mean(exp(residual)) on validation-block residuals of the
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import warnings
 from dataclasses import dataclass, field
@@ -20,6 +19,7 @@ import numpy as np
 import pandas as pd
 import xgboost as xgb
 
+from volforecast.models.common import qlike, sha256, smearing  # noqa: F401  (re-exported)
 from volforecast.models.xgb.config import Cell, n_threads
 from volforecast.models.xgb.data import CellFrames, Frame
 
@@ -107,27 +107,6 @@ def predict_log(models: list[xgb.Booster], X: pd.DataFrame, scaler: Scaler | Non
 def _iteration_kwargs(model: xgb.Booster) -> dict:
     best = model.attributes().get("best_iteration")
     return {"iteration_range": (0, int(best) + 1)} if best is not None else {}
-
-
-def smearing(y_log: pd.Series, pred_log: np.ndarray) -> dict:
-    resid = y_log.to_numpy(dtype=float) - np.asarray(pred_log, dtype=float)
-    return {
-        "S": float(np.mean(np.exp(resid))),
-        "resid_mean": float(resid.mean()),
-        "resid_std": float(resid.std(ddof=1)),
-        "n": int(resid.size),
-        "source": "val_residuals_train_only_model",
-    }
-
-
-def qlike(rv: np.ndarray, forecast_var: np.ndarray) -> float:
-    """Patton (2011) QLIKE: mean(rv/f - ln(rv/f) - 1)."""
-    ratio = np.asarray(rv, dtype=float) / np.asarray(forecast_var, dtype=float)
-    return float(np.mean(ratio - np.log(ratio) - 1.0))
-
-
-def sha256(path: Path) -> str:
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
 @dataclass

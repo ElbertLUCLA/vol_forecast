@@ -1,0 +1,40 @@
+# Sequence models on raw daily inputs: Mamba (selective state space; Gu & Dao 2023) and an
+# LSTM control (Hochreiter & Schmidhuber 1997). Dates, cutoffs, horizons and paths come from config.yaml.
+# See PROJECT_CONTEXT.md section 6.5.
+
+events: [covid, bear2022]
+archs: [mamba, lstm]
+horizons: [1, 5, 22]
+
+# Raw *daily* series only, with no precomputed weekly/monthly averages: the network has to learn
+# its own memory over the lookback window (the long-memory question). Standardized with
+# training-block mean/std.
+featuresets:
+  base: [log_rv_d]
+  ext: [log_rv_d, log_rs_neg, jump_pct]
+default_featuresets: [base, ext]
+
+model:
+  hidden_size: 16
+  num_layers: 2
+  mamba: {state_size: 16, expand: 2, conv_kernel: 4}
+
+# Small validation search per cell (seed 42 only), then the chosen setting is trained with all seeds.
+# lookback 126 ~ six months, i.e. far beyond HAR's 22-day and HARNet's 20-day monthly window.
+tuning:
+  lookback: [22, 66, 126]
+  learning_rate: [0.002]
+
+train:
+  batch_size: 256
+  max_epochs: 150
+  patience: 15          # epochs without validation-MSE improvement before stopping
+  weight_decay: 0.0
+  grad_clip: 1.0
+
+seeds: [42, 43, 44, 45, 46]
+train_tail_days: 63
+
+paths:
+  models_dir: models/seq
+  reports_dir: reports/seq

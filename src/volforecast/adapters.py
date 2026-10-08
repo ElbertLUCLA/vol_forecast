@@ -125,13 +125,13 @@ def harnet_view(features_df: pd.DataFrame, split: dict, segment: str, featureset
     precomputed rolling averages (plan.md section 4/8).
 
     featureset="base"     -> single-channel RV series, column ["rv"]
-    featureset="extended" -> 3-channel [rv, rs_neg, delta_j2] matching HARNet's
+    featureset="ext" (or legacy "extended") -> 3-channel [rv, rs_neg, delta_j2] matching HARNet's
                               HARSVJ input convention (src/harnet/util.py get_MAN_data)
     """
     start = pd.Timestamp(split["train"]["start"])
     end = pd.Timestamp(split[segment]["end"] if segment != "train" else split["train"]["end"])
     sliced = _slice_dates(features_df, start, end).set_index("date")
-    if featureset == "extended":
+    if featureset in ("ext", "extended"):
         return sliced[["rv", "rs_neg", "delta_j2"]]
     return sliced[["rv"]]
 
@@ -139,7 +139,7 @@ def harnet_view(features_df: pd.DataFrame, split: dict, segment: str, featureset
 def sequence_view(
     features_df: pd.DataFrame, split: dict, segment: str, featureset: str, h: int, lags: int = 10
 ) -> tuple[np.ndarray, np.ndarray, pd.DatetimeIndex]:
-    """3-D array (samples, lags, n_features) -> y_h{h}, for the Multi-Transformer.
+    """3-D array (samples, lags, n_features) -> y_h{h}, for generic sequence models.
 
     Each sample at day t uses features from days [t-lags+1, t] to predict y_h{h}
     at t. Samples whose lag window would reach before the segment/global start,

@@ -58,14 +58,23 @@ events:
     pre_event_window: ["2020-01-02", "2020-02-19"]
     event_window: ["2020-02-20", "2020-03-23"]
     post_event_window: ["2020-03-24", "2020-06-30"]
+    # Calm out-of-sample stretch after the event, still forecast by the frozen model.
+    # Reference period for false alarms (does a model alarm when nothing is happening?).
+    calm_window: ["2020-07-01", "2021-09-30"]
   bear2022:
     peak: "2022-01-03"
     trough: "2022-10-12"
     analysis_window: ["2021-07-01", "2023-03-31"]
     train_end: "2021-09-30"
+    # Explicit validation block instead of the default last 10% of pre-cutoff days. The default
+    # (2019-12-23 -> 2021-09-30) contained COVID, which the train-only models had never seen: their
+    # validation errors inflated the smearing factor to S ~ 2.3 at h = 22 (PROJECT_CONTEXT.md section 9d).
+    # Training through 2020 includes the crash; validation is the post-COVID, pre-cutoff stretch.
+    val_window: ["2021-01-04", "2021-09-30"]
     pre_event_window: ["2021-10-01", "2022-01-03"]
     event_window: ["2022-01-04", "2022-10-12"]
     post_event_window: ["2022-10-13", "2023-03-31"]
+    calm_window: ["2023-04-03", "2025-03-31"]
 
 sequence_view:
   lags: 10

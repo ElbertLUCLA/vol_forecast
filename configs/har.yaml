@@ -1,0 +1,9 @@
+# Log-HAR baseline (Corsi 2009; semivariance/jump extension as in Patton & Sheppard 2015).
+# Dates, cutoffs, horizons and paths come from config.yaml. See PROJECT_CONTEXT.md section 6.2.
+events: [covid, bear2022]
+featuresets: [base, ext]        # columns from volforecast.adapters.FEATURE_SETS (shared with XGBoost)
+horizons: [1, 5, 22]
+hac_min_lags: 5                 # Newey-West lags = max(hac_min_lags, h); targets overlap for h > 1
+train_tail_days: 63
+paths:
+  models_dir: models/har

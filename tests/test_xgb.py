@@ -18,7 +18,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from volforecast import adapters  # noqa: E402
 from volforecast.build_features import build_features  # noqa: E402
 from volforecast.config import load_config, resolve_path  # noqa: E402
-from volforecast.make_splits import build_split  # noqa: E402
 from volforecast.models.xgb import fit as xfit  # noqa: E402
 from volforecast.models.xgb.config import Cell, load_xgb_config  # noqa: E402
 from volforecast.models.xgb.data import build_frames, purge, target_dates, trading_calendar  # noqa: E402
@@ -26,42 +25,6 @@ from volforecast.models.xgb.forecast import FORECAST_SCHEMA, validate_forecasts 
 from volforecast.models.xgb.run_all import run_cell  # noqa: E402
 
 PIPE_CFG = load_config()
-
-
-# ---------------------------------------------------------------- synthetic data
-
-def _synthetic_measures(seed: int = 0) -> pd.DataFrame:
-    """HAR-like log-RV process on business days covering both events."""
-    rng = np.random.default_rng(seed)
-    dates = pd.bdate_range("2004-01-02", "2023-06-30")
-    n = len(dates)
-    log_rv = np.empty(n)
-    log_rv[:22] = -10.0
-    for t in range(22, n):
-        log_rv[t] = (-10.0 * 0.05 + 0.4 * log_rv[t - 1] + 0.35 * log_rv[t - 5:t].mean()
-                     + 0.2 * log_rv[t - 22:t].mean() + 0.45 * rng.standard_normal())
-    rv = np.exp(log_rv)
-    neg_share = rng.uniform(0.3, 0.7, n)
-    rs_neg, rs_pos = rv * neg_share, rv * (1 - neg_share)
-    return pd.DataFrame({
-        "date": dates, "rv": rv, "rs_neg": rs_neg, "rs_pos": rs_pos, "delta_j2": rs_pos - rs_neg,
-        "medrv": rv * 0.95, "ret_cc": rng.normal(0, 0.01, n), "ret_overnight": rng.normal(0, 0.003, n),
-    })
-
-
-@pytest.fixture(scope="module")
-def synth_features() -> pd.DataFrame:
-    return build_features(_synthetic_measures(), PIPE_CFG)
-
-
-@pytest.fixture(scope="module")
-def synth_splits(synth_features) -> dict:
-    dates = pd.to_datetime(synth_features["date"])
-    start = pd.Timestamp(PIPE_CFG["sample_period"]["modelling_start"])
-    return {
-        name: build_split(name, ev, dates, start, PIPE_CFG["features"]["horizons"])
-        for name, ev in PIPE_CFG["events"].items()
-    }
 
 
 @pytest.fixture()
@@ -137,7 +100,7 @@ def test_end_to_end_schema_frozen_and_reproducible(synth_features, synth_splits,
     # Check 8: schema.
     assert list(first.columns) == list(FORECAST_SCHEMA)
     validate_forecasts(first, split)
-    assert set(first["sample"]) == {"train_tail", "pre_event", "event", "post_event"}
+    assert set(first["sample"]) == {"train_tail", "pre_event", "event", "post_event", "calm"}
     for name in ("params.json", "features.json", "smear.json", "diagnostics.json", "importance.csv"):
         assert (model_dir / name).exists(), name
     assert (model_dir / "scaler.json").exists() == (booster == "gblinear")

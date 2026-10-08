@@ -33,14 +33,23 @@ def build_split(event_name: str, event_cfg: dict, all_dates: pd.Series, modellin
     pre_start, pre_end = (pd.Timestamp(d) for d in event_cfg["pre_event_window"])
     ev_start, ev_end = (pd.Timestamp(d) for d in event_cfg["event_window"])
     post_start, post_end = (pd.Timestamp(d) for d in event_cfg["post_event_window"])
+    calm = event_cfg.get("calm_window")
 
     pre_cutoff_days = all_dates[(all_dates >= modelling_start) & (all_dates <= train_end)].sort_values()
     if pre_cutoff_days.empty:
         raise ValueError(f"No trading days found for event '{event_name}' before {train_end.date()}.")
 
     n = len(pre_cutoff_days)
-    n_val = max(1, round(n * VAL_FRACTION))
-    val_start = pre_cutoff_days.iloc[-n_val]
+    if event_cfg.get("val_window"):
+        # Explicit validation block; it must end at the cutoff so the refit block is unchanged.
+        win_start, win_end = (pd.Timestamp(d) for d in event_cfg["val_window"])
+        if win_end != train_end:
+            raise ValueError(f"{event_name}: val_window must end at train_end ({train_end.date()}).")
+        val_start = pre_cutoff_days[pre_cutoff_days >= win_start].iloc[0]
+        n_val = int((pre_cutoff_days >= val_start).sum())
+    else:
+        n_val = max(1, round(n * VAL_FRACTION))
+        val_start = pre_cutoff_days.iloc[-n_val]
     train_start = modelling_start
     train_end_boundary = pre_cutoff_days.iloc[-n_val - 1] if n_val < n else pre_cutoff_days.iloc[0]
 
@@ -62,6 +71,7 @@ def build_split(event_name: str, event_cfg: dict, all_dates: pd.Series, modellin
             "end_by_horizon": train_end_by_horizon,
         },
         "val": {
+            "rule": "val_window" if event_cfg.get("val_window") else f"last {VAL_FRACTION:.0%} of pre-cutoff days",
             "start": val_start.strftime("%Y-%m-%d"),
             "end": train_end.strftime("%Y-%m-%d"),
             "end_by_horizon": val_end_by_horizon,
@@ -69,6 +79,7 @@ def build_split(event_name: str, event_cfg: dict, all_dates: pd.Series, modellin
         "pre_event": {"start": pre_start.strftime("%Y-%m-%d"), "end": pre_end.strftime("%Y-%m-%d")},
         "event": {"start": ev_start.strftime("%Y-%m-%d"), "end": ev_end.strftime("%Y-%m-%d")},
         "post_event": {"start": post_start.strftime("%Y-%m-%d"), "end": post_end.strftime("%Y-%m-%d")},
+        **({"calm": {"start": calm[0], "end": calm[1]}} if calm else {}),
         "horizons": horizons,
     }
 
