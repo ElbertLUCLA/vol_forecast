@@ -154,6 +154,34 @@ def plot_lift(df, event, h, start, end, split=None, thresholds=(1.5, 2.0), ax=No
     return ax
 
 
+LIFT_WINDOWS = {"covid": ("2019-10-01", "2020-04-30"), "bear2022": ("2021-07-01", "2023-03-31")}
+EVENT_NAMES = {"covid": "COVID crash", "bear2022": "2022 drawdown"}
+
+
+def plot_lift_grid(df, splits, horizons=(5, 22), events=("covid", "bear2022"), thresholds=(1.5, 2.0),
+                   windows=LIFT_WINDOWS, height: float = 6.6):
+    """Early-warning lift, rows = horizon, columns = event; one log y-axis per row so events compare directly."""
+    fig, axes = plt.subplots(len(horizons), len(events), figsize=(FIG_WIDTH, height), sharey="row", squeeze=False)
+    for i, h in enumerate(horizons):
+        for j, event in enumerate(events):
+            ax = axes[i, j]
+            letter = chr(ord("a") + i * len(events) + j)
+            plot_lift(df, event, h, *windows[event], splits[event], thresholds=thresholds, ax=ax,
+                      title=f"({letter}) {EVENT_NAMES[event]}, h = {h}")
+            loc = mdates.AutoDateLocator(minticks=3, maxticks=5)  # half page width: fewer date ticks
+            ax.xaxis.set_major_locator(loc)
+            ax.xaxis.set_major_formatter(mdates.ConciseDateFormatter(loc))
+            for t in ax.texts:  # narrow panels: keep labels clear of each other and of the peak line
+                if t.get_text().strip() == "cutoff":
+                    t.set(text="cutoff ", rotation=90, ha="right", va="top")
+                elif t.get_text().strip() == f"{min(thresholds):g}×":
+                    t.set_va("top")  # lowest threshold labelled below its line, the others above
+            if j > 0:
+                ax.set_ylabel("")
+                ax.tick_params(labelleft=True)
+    return fig, axes
+
+
 def bar_by_family(table: pd.DataFrame, value: str, ax=None, ref: float | None = None, title: str = "",
                   ylabel: str | None = None):
     """Grouped bars: one group per horizon, one bar per family (ext set; GARCH has none). No value labels."""
