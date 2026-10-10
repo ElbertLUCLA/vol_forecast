@@ -22,6 +22,7 @@ so all models are scored identically. The measures answer three questions:
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import numpy as np
@@ -35,9 +36,14 @@ THRESHOLDS = (1.5, 2.0, 3.0)
 OOS = ("pre_event", "event", "post_event", "calm")
 
 FAMILY_ORDER = ["GARCH", "HAR", "XGB-linear", "XGB-tree", "HARNet", "LSTM", "Mamba"]
+# Supplementary family, in the tables but not the figures: HARNet's OLS level-HAR initialization
+# (iteration 0), frozen at the cutoff (volforecast.models.harnet.har_level).
+SUPPLEMENTARY_FAMILIES = ["HAR-level"]
 
 
 def family(model: str) -> str:
+    if model.startswith("harnet20_init"):
+        return "HAR-level"
     if model.startswith("xgb-gbtree"):
         return "XGB-tree"
     if model.startswith("xgb-gblinear"):
@@ -206,7 +212,8 @@ def dm_vs_benchmark(df: pd.DataFrame, benchmark: str = "HAR", segments=("event",
 def lead_times(df: pd.DataFrame, thresholds=THRESHOLDS) -> pd.DataFrame:
     """First out-of-sample date each model's lift crosses each threshold, in trading days vs the peak.
 
-    Negative = before the peak (a genuine early warning). Searched from the cutoff to the trough.
+    lead_days = peak position - first crossing position: positive = before the peak (a genuine early
+    warning), 0 = on the peak day, negative = after the peak. Searched from the cutoff to the trough.
     """
     rows = []
     for (event, model), g in df[df["sample"].isin(OOS)].groupby(["event", "model"]):
@@ -300,6 +307,107 @@ def training_summary(models_root: str | Path | None = None) -> pd.DataFrame:
     out["val_qlike_rw"] = out.groupby(["event", "h"])["val_qlike_rw"].transform("max")
     return out[[c for c in cols if c in out]].sort_values(["event", "h", "family", "model"])
 
+
+# ---------------------------------------------------------------- paper tables (ext - base, ceilings, selection)
+
+def ext_vs_base(acc: pd.DataFrame, lt: pd.DataFrame, alarms: pd.DataFrame, tau: float = 2.0) -> pd.DataFrame:
+    """Does downside information help? ext vs base per (event, family, h), from the three eval outputs.
+
+    acc = accuracy_table, lt = lead_times, alarms = alarm_table (the accuracy_by_window, lead_times and
+    alarm_skill CSVs). Event-window QLIKE (diff = ext - base, negative = ext better), lead days at
+    tau x normal (positive = before the peak) and Peirce skill at tau. GARCH has no feature set and is left out.
+    """
+    key = ["event", "family", "h"]
+    parts = [
+        acc[acc["sample"] == "event"].set_index(key + ["fs"])["qlike"].rename("qlike_event"),
+        lt.set_index(key + ["fs"])[f"lead_days_{tau}x"].astype(float).rename(f"lead_days_{tau}x"),
+        alarms[alarms["tau"] == tau].set_index(key + ["fs"])["peirce"].rename(f"peirce_tau{tau:g}"),
+    ]
+    long = pd.concat(parts, axis=1).reset_index()
+    wide = long[long["fs"].isin(["base", "ext"])].pivot_table(index=key, columns="fs", dropna=False)
+    wide.columns = [f"{v}_{fs}" for v, fs in wide.columns]
+    out = wide.reset_index()
+    out["qlike_event_diff"] = out["qlike_event_ext"] - out["qlike_event_base"]
+    cols = ["qlike_event_base", "qlike_event_ext", "qlike_event_diff",
+            f"lead_days_{tau}x_base", f"lead_days_{tau}x_ext", f"peirce_tau{tau:g}_base", f"peirce_tau{tau:g}_ext"]
+    order = {f: i for i, f in enumerate(FAMILY_ORDER + SUPPLEMENTARY_FAMILIES)}
+    out = out.sort_values(["event", "h", "family"], key=lambda s: s.map(order) if s.name == "family" else s)
+    return out[key + cols].reset_index(drop=True)
+
+
+def _cell_fs_h(model: str) -> tuple[str, int]:
+    fs, h = model.rsplit("_", 2)[-2:]
+    return fs, int(h.lstrip("h"))
+
+
+def ceilings(models_root: str | Path | None = None) -> pd.DataFrame:
+    """Output ceiling of every bounded model cell (XGBoost gbtree, LSTM, Mamba) from its diagnostics.json.
+
+    The two families log the same quantities under different keys:
+      XGBoost: ceiling.ceiling_var, ceiling.max_train_target_var, days_realized_above_ceiling.event
+      seq:     ceiling_var, max_train_target_log (exp -> variance), event_days_realized_above_ceiling
+    ceiling_var includes the smearing factor S (the largest forecast_var the model can emit); the
+    training maximum is the largest h-day mean RV target in the refit sample. Annualized vol in %
+    = sqrt(252 * var) * 100. gblinear cells have no ceiling and are left out.
+    """
+    from volforecast.config import PROJECT_ROOT
+
+    root = Path(models_root) if models_root else PROJECT_ROOT / "models"
+    rows = []
+    for p in sorted((root / "xgb").glob("*/*/diagnostics.json")):
+        d = json.loads(p.read_text(encoding="utf-8"))
+        c = d["ceiling"]
+        if c.get("ceiling_var") is None:
+            continue
+        rows.append({"event": p.parts[-3], "model": p.parent.name, "ceiling_var": c["ceiling_var"],
+                     "max_train_target_var": c["max_train_target_var"],
+                     "event_days_above_ceiling": d["days_realized_above_ceiling"]["event"]})
+    for p in sorted((root / "seq").glob("*/*/diagnostics.json")):
+        d = json.loads(p.read_text(encoding="utf-8"))
+        rows.append({"event": p.parts[-3], "model": p.parent.name, "ceiling_var": d["ceiling_var"],
+                     "max_train_target_var": float(np.exp(d["max_train_target_log"])),
+                     "event_days_above_ceiling": d["event_days_realized_above_ceiling"]})
+    out = pd.DataFrame(rows)
+    out["family"] = out["model"].map(family)
+    out[["fs", "h"]] = pd.DataFrame(out["model"].map(_cell_fs_h).tolist(), index=out.index)
+    out["ceiling_vol_pct"] = np.sqrt(252 * out["ceiling_var"]) * 100
+    out["max_train_target_vol_pct"] = np.sqrt(252 * out["max_train_target_var"]) * 100
+    cols = ["event", "family", "model", "fs", "h", "ceiling_var", "ceiling_vol_pct", "max_train_target_var",
+            "max_train_target_vol_pct", "event_days_above_ceiling"]
+    return out[cols].sort_values(["event", "family", "h", "fs"]).reset_index(drop=True)
+
+
+def selection_summary(models_root: str | Path | None = None) -> pd.DataFrame:
+    """What validation selected in each cell, from the run logs.
+
+    HARNet: best_iter, stopped_at, max_iterations (params.json) and cap_bound = stopped_at >= max_iterations,
+    i.e. training ran into the iteration cap before the patience rule stopped it.
+    LSTM / Mamba: lookback and best_epochs (one per seed; median in best_epochs_median).
+    XGBoost: best_trial of n_trials.
+    """
+    from volforecast.config import PROJECT_ROOT
+
+    root = Path(models_root) if models_root else PROJECT_ROOT / "models"
+    frames = []
+    t = pd.read_csv(root / "harnet" / "run_log.csv").drop_duplicates(["event", "model"], keep="last")
+    t["max_iterations"] = [
+        json.loads((root / "harnet" / e / m / "params.json").read_text(encoding="utf-8"))["max_iterations"]
+        for e, m in zip(t["event"], t["model"])]
+    t["cap_bound"] = t["stopped_at"] >= t["max_iterations"]
+    frames.append(t[["event", "model", "featureset", "h", "best_iter", "stopped_at", "max_iterations", "cap_bound"]])
+    t = pd.read_csv(root / "seq" / "run_log.csv").drop_duplicates(["event", "model"], keep="last")
+    t["best_epochs_median"] = t["best_epochs"].map(lambda s: float(np.median(json.loads(s))))
+    frames.append(t[["event", "model", "featureset", "h", "lookback", "best_epochs", "best_epochs_median"]])
+    t = pd.read_csv(root / "xgb" / "run_log.csv").drop_duplicates(["event", "model"], keep="last")
+    frames.append(t[["event", "model", "featureset", "h", "best_trial", "n_trials"]])
+    out = pd.concat(frames, ignore_index=True).rename(columns={"featureset": "fs"})
+    out.insert(1, "family", out["model"].map(family))
+    for c in ("best_iter", "stopped_at", "max_iterations", "lookback", "best_trial", "n_trials"):
+        out[c] = out[c].astype("Int64")
+    out["cap_bound"] = out["cap_bound"].astype("boolean")
+    order = {f: i for i, f in enumerate(FAMILY_ORDER)}
+    return out.sort_values(["event", "family", "h", "fs"],
+                           key=lambda s: s.map(order) if s.name == "family" else s).reset_index(drop=True)
 
 
 # ---------------------------------------------------------------- smearing finding (2022 validation block)
