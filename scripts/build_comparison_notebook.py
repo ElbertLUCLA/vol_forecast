@@ -35,6 +35,7 @@ day by day with live inputs. Every model is scored from the same forecast files
 | HARNet | raw daily RV (+ RS⁻, ΔJ²) | PyTorch port, QLIKE, OLS-HAR init |
 | LSTM | raw daily log RV (+ log RS⁻, jump) over a tuned 22–126-day lookback | control for "plain recurrence" |
 | Mamba | same as LSTM | selective state-space (Gu & Dao 2023), trained on the AMD GPU |
+| HAR-level *(supplementary)* | same as HARNet | HARNet's OLS level-HAR initialization (iteration 0), frozen at the cutoff; tables only, not in the figures |
 
 **Three questions**
 
@@ -70,7 +71,7 @@ from volforecast import adapters, evaluation as E, evaluation_plots as P
 from volforecast.config import load_config, resolve_path, PROJECT_ROOT
 
 pd.set_option("display.precision", 3); pd.set_option("display.width", 160)
-plt.rcParams.update({"figure.dpi": 110, "font.size": 9})
+plt.rcParams.update({"figure.dpi": 110}); P.use_paper_style()  # 6.5 in figures, text >= 9 pt
 cfg = load_config()
 features = adapters.load_features()
 splits = {e: adapters.load_split(e) for e in ("covid", "bear2022")}
@@ -149,16 +150,18 @@ For h = 22, pre-peak *realized* targets already contain crash days, so judge the
 forecast's own movement (lift), not by forecast-vs-realized loss.
 """)
 code(r"""
-fig, axes = plt.subplots(2, 1, figsize=(11, 7.5), sharex=True)
+fig, axes = plt.subplots(2, 1, figsize=(P.FIG_WIDTH, 6.2), sharex=True)
 for ax, h in zip(axes, (5, 22)):
-    P.plot_forecasts(df, "covid", h, "2019-12-01", "2020-06-30", splits["covid"], ax=ax)
-fig.tight_layout(); fig.savefig(out_dir / "covid_forecasts.png", dpi=150)
+    P.plot_forecasts(df, "covid", h, "2019-12-01", "2020-06-30", splits["covid"], ax=ax,
+                     title=f"COVID, h = {h} (ext feature set)")
+P.finish(fig, out_dir / "covid_forecasts")
 """)
 code(r"""
-fig, axes = plt.subplots(2, 1, figsize=(11, 7), sharex=True)
+fig, axes = plt.subplots(2, 1, figsize=(P.FIG_WIDTH, 6.2), sharex=True)
 for ax, h in zip(axes, (5, 22)):
-    P.plot_lift(df, "covid", h, "2019-10-01", "2020-04-30", splits["covid"], thresholds=(2.0, 3.0), ax=ax)
-fig.tight_layout(); fig.savefig(out_dir / "covid_lift.png", dpi=150)
+    P.plot_lift(df, "covid", h, "2019-10-01", "2020-04-30", splits["covid"], thresholds=(2.0, 3.0), ax=ax,
+                title=f"COVID: early-warning lift, h = {h}")
+P.finish(fig, out_dir / "covid_lift")
 """)
 md(r"""
 ### 3a. Early warning: when did each model's forecast cross 1.5× / 2× / 3× normal?
@@ -193,10 +196,12 @@ onset = E.onset_table(df, "covid", n_days=10)
 onset.to_csv(out_dir / "covid_onset.csv", index=False)
 display(onset[onset["fs"].isin(["ext", "-"])].sort_values(["h", "coverage_mean"], ascending=[True, False])
         .set_index(["h", "family"]).drop(columns=["fs", "model"]).style.format("{:.3g}"))
-fig, axes = plt.subplots(1, 2, figsize=(12, 3.8))
-P.bar_by_family(onset, "escalation_mean", ax=axes[0], ref=1.0, title="Escalation in the first 10 event days (> 1 = expects worse)")
-P.bar_by_family(onset, "coverage_mean", ax=axes[1], ref=1.0, title="Coverage of what came next (1 = right level)")
-fig.tight_layout(); fig.savefig(out_dir / "covid_onset.png", dpi=150)
+fig, axes = plt.subplots(2, 1, figsize=(P.FIG_WIDTH, 5.6))
+P.bar_by_family(onset, "escalation_mean", ax=axes[0], ref=1.0, ylabel="escalation",
+                title="(a) Escalation, first 10 event days (> 1 = expects worse)")
+P.bar_by_family(onset, "coverage_mean", ax=axes[1], ref=1.0, ylabel="coverage",
+                title="(b) Coverage of what came next (1 = right level)")
+P.finish(fig, out_dir / "covid_onset")
 """)
 
 md(r"""
@@ -206,15 +211,17 @@ Peak 2022-01-03, trough 2022-10-12. Models were frozen on 2021-09-30. They train
 elevated but never spiked like 2020, so the test is **staying on the right level for nine months**.
 """)
 code(r"""
-fig, axes = plt.subplots(2, 1, figsize=(11, 7.5), sharex=True)
+fig, axes = plt.subplots(2, 1, figsize=(P.FIG_WIDTH, 6.2), sharex=True)
 for ax, h in zip(axes, (5, 22)):
-    P.plot_forecasts(df, "bear2022", h, "2021-09-01", "2023-03-31", splits["bear2022"], ax=ax)
-fig.tight_layout(); fig.savefig(out_dir / "bear2022_forecasts.png", dpi=150)
+    P.plot_forecasts(df, "bear2022", h, "2021-09-01", "2023-03-31", splits["bear2022"], ax=ax,
+                     title=f"2022 bear market, h = {h} (ext feature set)")
+P.finish(fig, out_dir / "bear2022_forecasts")
 """)
 code(r"""
-fig, ax = plt.subplots(figsize=(11, 3.8))
-P.plot_lift(df, "bear2022", 22, "2021-07-01", "2023-03-31", splits["bear2022"], thresholds=(2.0, 3.0), ax=ax)
-fig.tight_layout(); fig.savefig(out_dir / "bear2022_lift.png", dpi=150)
+fig, ax = plt.subplots(figsize=(P.FIG_WIDTH, 3.6))
+P.plot_lift(df, "bear2022", 22, "2021-07-01", "2023-03-31", splits["bear2022"], thresholds=(2.0, 3.0), ax=ax,
+            title="2022 bear market: early-warning lift, h = 22")
+P.finish(fig, out_dir / "bear2022_lift")
 display(lt[(lt["event"] == "bear2022") & lt["fs"].isin(["ext", "-"])].sort_values(["h", "family"])[cols]
         .set_index(["h", "family", "fs"]))
 """)
@@ -224,11 +231,13 @@ track.to_csv(out_dir / "bear2022_tracking.csv", index=False)
 display(track[track["fs"].isin(["ext", "-"])].sort_values(["h", "qlike"]).set_index(["h", "family"])
         .drop(columns=["fs", "model"]).style.format("{:.3f}").format("{:.3g}", subset=["mse_var"])
         .set_caption("2022 event window; mse_var in (daily %²)²"))
-fig, axes = plt.subplots(1, 3, figsize=(16, 3.8))
-P.bar_by_family(track, "qlike", ax=axes[0], title="2022 event window: QLIKE (lower is better)")
-P.bar_by_family(track, "mse_var", ax=axes[1], title="2022 event window: MSE, variance scale (lower is better)")
-P.bar_by_family(track, "bias_log", ax=axes[2], ref=0.0, title="2022 event window: mean ln(forecast / realized)")
-fig.tight_layout(); fig.savefig(out_dir / "bear2022_tracking.png", dpi=150)
+fig, axes = plt.subplots(3, 1, figsize=(P.FIG_WIDTH, 7.6))
+P.bar_by_family(track, "qlike", ax=axes[0], ylabel="QLIKE", title="(a) QLIKE (lower is better)")
+P.bar_by_family(track, "mse_var", ax=axes[1], ylabel="MSE, (daily %²)²",
+                title="(b) MSE, variance scale (lower is better)")
+P.bar_by_family(track, "bias_log", ax=axes[2], ref=0.0, ylabel="mean ln(fc / realized)",
+                title="(c) Bias: mean ln(forecast / realized)")
+P.finish(fig, out_dir / "bear2022_tracking")
 """)
 
 md(r"""
@@ -246,10 +255,11 @@ Three checks separate the two:
 code(r"""
 alarms = E.alarm_table(df)
 alarms.to_csv(out_dir / "alarm_skill.csv", index=False)
-fig, axes = plt.subplots(1, 2, figsize=(11, 5))
-for ax, event in zip(axes, ("covid", "bear2022")):
-    P.plot_alarm_skill(alarms, event, tau=2.0, ax=ax)
-fig.tight_layout(); fig.savefig(out_dir / "alarm_skill.png", dpi=150)
+fig, axes = plt.subplots(1, 2, figsize=(P.FIG_WIDTH, 4.4), sharey=True)
+for ax, event, name in zip(axes, ("covid", "bear2022"), ("(a) COVID", "(b) 2022 bear market")):
+    P.plot_alarm_skill(alarms, event, tau=2.0, ax=ax, title=f"{name}, τ = 2")
+axes[1].set_ylabel("")
+P.finish(fig, out_dir / "alarm_skill", handles=P.alarm_skill_handles(alarms), ncol=4)
 """)
 code(r"""
 a = alarms[(alarms["tau"] == 2.0) & alarms["fs"].isin(["ext", "-"])]
@@ -260,11 +270,12 @@ for event in ("covid", "bear2022"):
             .set_caption(f"{event}: alarm diagnostics at forecast ≥ 2× normal (ext set)"))
 """)
 code(r"""
-fig, axes = plt.subplots(1, 2, figsize=(12, 3.8))
-for ax, event in zip(axes, ("covid", "bear2022")):
+fig, axes = plt.subplots(2, 1, figsize=(P.FIG_WIDTH, 5.6))
+for ax, event, name in zip(axes, ("covid", "bear2022"), ("(a) COVID model", "(b) 2022 model")):
     t = a[a["event"] == event]
-    P.bar_by_family(t, "calm_bias_log", ax=ax, ref=0.0, title=f"{event} model, calm window: mean ln(forecast / realized)")
-fig.tight_layout(); fig.savefig(out_dir / "calm_bias.png", dpi=150)
+    P.bar_by_family(t, "calm_bias_log", ax=ax, ref=0.0, ylabel="mean ln(fc / realized)",
+                    title=f"{name}, calm window: mean ln(forecast / realized)")
+P.finish(fig, out_dir / "calm_bias")
 """)
 md(r"""
 ### Is the event-window advantage statistically significant?
@@ -300,14 +311,14 @@ code(r"""
 comp = E.smearing_comparison(PROJECT_ROOT / "data/processed/archive/val_with_covid/forecasts",
                              resolve_path(cfg["paths"]["forecasts_dir"]), features=features)
 comp.to_csv(out_dir / "smearing_finding_2022.csv", index=False)
-fig, axes = plt.subplots(2, 2, figsize=(13, 7))
-P.plot_smearing_shift(comp, "S", 22, ax=axes[0, 0], ref=1.0, title="Smearing factor S, h = 22")
-P.plot_smearing_shift(comp, "S", 5, ax=axes[0, 1], ref=1.0, title="Smearing factor S, h = 5")
-P.plot_smearing_shift(comp, "calm_bias_log", 22, ax=axes[1, 0], ref=0.0,
-                      title="Calm window 2023-04 → 2025-03: mean ln(forecast / realized), h = 22")
-P.plot_smearing_shift(comp, "alarm_to_stress", 22, ax=axes[1, 1], ref=1.0,
-                      title="2022 model: alarms ÷ realized stress days (2× normal), h = 22")
-fig.tight_layout(); fig.savefig(out_dir / "smearing_finding_2022.png", dpi=150)
+fig, axes = plt.subplots(2, 2, figsize=(P.FIG_WIDTH, 6.6))
+P.plot_smearing_shift(comp, "S", 22, ax=axes[0, 0], ref=1.0, ylabel="S", title="(a) Smearing factor, h = 22")
+P.plot_smearing_shift(comp, "S", 5, ax=axes[0, 1], ref=1.0, ylabel="S", title="(b) Smearing factor, h = 5")
+P.plot_smearing_shift(comp, "calm_bias_log", 22, ax=axes[1, 0], ref=0.0, ylabel="mean ln(fc / realized)",
+                      title="(c) Calm-window bias, h = 22")
+P.plot_smearing_shift(comp, "alarm_to_stress", 22, ax=axes[1, 1], ref=1.0, ylabel="alarms ÷ stress days",
+                      title="(d) Alarm-to-stress (τ = 2), h = 22")
+P.finish(fig, out_dir / "smearing_finding_2022", handles=P.smearing_handles(), ncol=2)
 """)
 code(r"""
 cols = ["S", "event_qlike", "event_bias_log", "calm_bias_log", "alarm_to_stress", "peirce", "lead_days_2.0x"]
@@ -315,6 +326,38 @@ show = comp[comp["fs"].isin(["ext", "-"])].set_index(["h", "family"]).sort_index
 show = show[[f"{c}__{s}" for c in cols for s in ("val_with_covid", "val_post_covid")]]
 show.columns = pd.MultiIndex.from_tuples([tuple(c.split("__")) for c in show.columns])
 display(show.style.format("{:.2f}", na_rep="–").set_caption("2022 event, ext set: old split vs new split"))
+""")
+
+md(r"""
+## 7b. Paper tables: ext − base, output ceilings, validation selection
+
+- **ext − base** (does downside information help?): event-window QLIKE (diff = ext − base; negative = ext better),
+  lead days at 2× normal (positive = before the peak) and Peirce skill at τ = 2, per event × family × horizon.
+  Built from the accuracy, lead-time and alarm tables above. GARCH has no feature set.
+- **Ceilings**: the largest variance each bounded model (XGB-tree, LSTM, Mamba) can output, including the smearing factor,
+  against the largest training target, and how many event days' realized variance exceeded it.
+- **Selection**: what validation picked in each cell. HARNet: best iteration, where training stopped, and whether it
+  ran into the 100,000-iteration cap. LSTM/Mamba: lookback and best epochs per seed. XGBoost: best Optuna trial of 100.
+""")
+code(r"""
+evb = E.ext_vs_base(acc, lt, alarms, tau=2.0)
+evb.to_csv(out_dir / "ext_vs_base.csv", index=False)
+display(evb.set_index(["event", "h", "family"]).style.format("{:.3f}", na_rep="–")
+        .format("{:.0f}", subset=["lead_days_2.0x_base", "lead_days_2.0x_ext"], na_rep="–")
+        .background_gradient(subset=["qlike_event_diff"], cmap="RdYlGn_r", vmin=-0.1, vmax=0.1)
+        .set_caption("ext − base: event-window QLIKE, lead days at 2× normal, Peirce at τ = 2"))
+""")
+code(r"""
+ceil = E.ceilings()
+ceil.to_csv(out_dir / "ceilings.csv", index=False)
+display(ceil.set_index(["event", "family", "h", "fs"]).drop(columns="model")
+        .style.format("{:.3g}", subset=["ceiling_var", "max_train_target_var"])
+        .format("{:.0f}", subset=["ceiling_vol_pct", "max_train_target_vol_pct"])
+        .set_caption("Output ceilings (vol in % annualized)"))
+sel = E.selection_summary()
+sel.to_csv(out_dir / "selection_summary.csv", index=False)
+display(sel.set_index(["event", "family", "h", "fs"]).drop(columns="model")
+        .style.format(na_rep="–").set_caption("Validation selection per cell"))
 """)
 
 md(SUMMARY)

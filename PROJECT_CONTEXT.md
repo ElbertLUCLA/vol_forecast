@@ -53,9 +53,11 @@ This file is the reference for the project as a whole: the research question, th
 **Commands:**
 ```bash
 .venv-rocm/Scripts/python -m volforecast.models.seq.run_all --arch mamba --event bear2022   # GPU
-uv run python scripts/build_comparison_notebook.py
+uv run python -m volforecast.models.harnet.har_level    # HAR-level forecasts (HARNet's OLS init, no training)
+uv run python -m volforecast.qc_report                  # reports/qc incl. descriptive_stats.csv (Table 3.1)
+uv run python scripts/build_comparison_notebook.py      # also writes ext_vs_base / ceilings / selection_summary CSVs and PDF figures
 uv run jupyter nbconvert --to notebook --execute --inplace notebooks/02_model_comparison.ipynb
-uv run pytest                                                                                # 45 tests
+uv run pytest                                                                                # 52 tests
 ```
 
 ---

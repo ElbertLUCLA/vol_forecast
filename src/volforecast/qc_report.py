@@ -48,40 +48,83 @@ def top_outliers(measures: pd.DataFrame, n: int = 20) -> dict[str, pd.DataFrame]
     }
 
 
+def descriptive_stats(measures: pd.DataFrame, floor_percentile: float = 0.001) -> pd.DataFrame:
+    """Table 3.1: full-sample summary of the daily series the models use.
+
+    RV, ln RV, RS- (daily decimal variances), and the jump measure in both forms used by the models:
+    jump_pct = ln(1 + dJ2 / RV) (HAR, XGBoost, LSTM, Mamba; Patton & Sheppard 2015) and the raw signed
+    jump dJ2 = RS+ - RS- (HARNet). Skewness and excess kurtosis are pandas' bias-corrected estimators;
+    ACF is the sample autocorrelation at lags 1, 5 and 22. ann_mean_vol_pct = sqrt(252 * mean) * 100,
+    only for the variance series. ln RV and jump_pct use the feature store's floor (RV clipped at its
+    `floor_percentile` quantile, config realized_measures.zero_rv_floor_percentile), so they equal
+    log_rv_d and jump_pct in spy_features.parquet; RV, RS- and dJ2 are unfloored.
+    """
+    from volforecast.build_features import _floor_and_log
+
+    df = measures.sort_values("date")
+    rv = df["rv"].astype(float)
+    ln_rv, floor = _floor_and_log(rv, floor_percentile, "rv")
+    series = {
+        "rv": rv,
+        "ln_rv": ln_rv,
+        "rs_neg": df["rs_neg"].astype(float),
+        "jump_pct": np.log(1.0 + df["delta_j2"] / rv.clip(lower=floor)),
+        "delta_j2": df["delta_j2"].astype(float),
+    }
+    rows = []
+    for name, s in series.items():
+        s = s.reset_index(drop=True)
+        rows.append({
+            "series": name, "n": int(s.notna().sum()), "mean": s.mean(), "sd": s.std(), "min": s.min(),
+            "max": s.max(), "skewness": s.skew(), "excess_kurtosis": s.kurt(),
+            "acf_1": s.autocorr(1), "acf_5": s.autocorr(5), "acf_22": s.autocorr(22),
+            "ann_mean_vol_pct": float(np.sqrt(252 * s.mean()) * 100) if name in ("rv", "rs_neg") else np.nan,
+            "start": df["date"].min().date(), "end": df["date"].max().date(),
+        })
+    return pd.DataFrame(rows)
+
+
 def make_figures(measures: pd.DataFrame, cfg: dict, out_dir):
+    """log RV time series, histogram and ACF in the paper format (evaluation_plots): 6.5 in wide,
+    text >= 9 pt, events shaded peak -> trough as in every other figure; PNG and vector PDF."""
+    from volforecast import evaluation_plots as P
+
+    P.use_paper_style()
     df = measures.sort_values("date")
     log_rv = np.log(df["rv"].clip(lower=1e-12))
 
-    fig, ax = plt.subplots(figsize=(12, 4))
-    ax.plot(df["date"], log_rv, lw=0.6)
-    for event_cfg in cfg["events"].values():
-        ax.axvspan(pd.Timestamp(event_cfg["event_window"][0]), pd.Timestamp(event_cfg["event_window"][1]),
-                   color="red", alpha=0.15)
-    ax.set_title("log RV, SPY (event windows shaded)")
-    ax.set_ylabel("log RV")
-    fig.tight_layout()
-    fig.savefig(out_dir / "log_rv_timeseries.png", dpi=150)
+    fig, ax = plt.subplots(figsize=(P.FIG_WIDTH, 2.8))
+    P.style(ax, "ln RV")
+    for event in cfg["events"]:
+        P.shade_event(ax, event)
+    ax.plot(df["date"], log_rv, lw=0.5, color=P.INK, label="ln RV (daily)")
+    P.date_axis(ax)
+    ax.set_title("SPY daily ln RV", loc="left", color=P.INK)
+    P.finish(fig, out_dir / "log_rv_timeseries")
     plt.close(fig)
 
-    fig, ax = plt.subplots(figsize=(6, 4))
-    ax.hist(log_rv.dropna(), bins=60)
-    ax.set_title("Histogram of log RV")
-    fig.tight_layout()
-    fig.savefig(out_dir / "log_rv_histogram.png", dpi=150)
+    fig, ax = plt.subplots(figsize=(P.FIG_WIDTH, 2.8))
+    P.style(ax, "days")
+    ax.hist(log_rv.dropna(), bins=60, color=P.MUTED)
+    ax.set_xlabel("ln RV", color=P.MUTED)
+    ax.set_title("Histogram of daily ln RV", loc="left", color=P.INK)
+    P.finish(fig, out_dir / "log_rv_histogram")
     plt.close(fig)
 
     from statsmodels.graphics.tsaplots import plot_acf
 
-    fig, ax = plt.subplots(figsize=(8, 4))
-    plot_acf(log_rv.dropna(), lags=60, ax=ax)
-    ax.set_title("ACF of log RV")
-    fig.tight_layout()
-    fig.savefig(out_dir / "log_rv_acf.png", dpi=150)
+    fig, ax = plt.subplots(figsize=(P.FIG_WIDTH, 2.8))
+    plot_acf(log_rv.dropna(), lags=60, ax=ax, color=P.INK, vlines_kwargs={"colors": P.INK})
+    P.style(ax, "autocorrelation")
+    ax.set_xlabel("lag (trading days)", color=P.MUTED)
+    ax.set_title("ACF of daily ln RV", loc="left", color=P.INK)
+    P.finish(fig, out_dir / "log_rv_acf")
     plt.close(fig)
 
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    logging.getLogger("fontTools").setLevel(logging.WARNING)  # PDF font subsetting chatter
     cfg = load_config()
     measures_path = resolve_path(cfg["paths"]["daily_measures_path"])
     calendar_path = resolve_path(cfg["paths"]["calendar_path"])
@@ -100,6 +143,10 @@ def main() -> None:
     for name, tbl in outliers.items():
         ensure_parent(qc_dir / f"{name}.csv")
         tbl.to_csv(qc_dir / f"{name}.csv", index=False)
+
+    stats = descriptive_stats(measures, cfg["realized_measures"]["zero_rv_floor_percentile"])
+    stats.to_csv(qc_dir / "descriptive_stats.csv", index=False)
+    logger.info("Descriptive statistics:\n%s", stats.to_string())
 
     make_figures(measures, cfg, qc_dir)
     logger.info("QC report written to %s", qc_dir)
