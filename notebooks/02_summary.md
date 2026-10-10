@@ -1,3 +1,6 @@
+> **Superseded (2026-10-09).** Written before the Mamba 2022 re-run. Findings now live in the paper plan
+> (`Graduate Thesis/paper_plan.md`, §1.5, §5, §6); numbers come from `reports/eval/`.
+
 ## 8. Summary of findings
 
 Numbers are for the `ext` feature set unless noted. "Normal" = the long-run training-sample RV (≈ 14–15% annualized vol).

@@ -1,5 +1,10 @@
 # Project Context — SPY Realized Volatility & Drawdown Early Warning
 
+> **Superseded for thesis content (2026-10-09).** The paper plan (`Graduate Thesis/paper_plan.md`) is the source of
+> truth for the research question, design decisions, findings and references. This file remains a code-side
+> record (environment, commands, repo layout). Its result sections (§9–§9d) and "pending" notes are out of date:
+> the Mamba 2022 re-run is finished and `reports/eval/` was regenerated on 2026-10-09. Do not quote numbers from here.
+
 *MASDS Thesis (UCLA) · Elbert Liu · context snapshot as of 2026-10-08 (first draft due ~2026-10-09)*
 *Repo: `deep_learning_volatility_forecast` · companion docs: `plan.md` (data pipeline), `XGBoost_implementation.md` (XGBoost build)*
 
@@ -50,7 +55,7 @@ This file is the reference for the project as a whole: the research question, th
 .venv-rocm/Scripts/python -m volforecast.models.seq.run_all --arch mamba --event bear2022   # GPU
 uv run python scripts/build_comparison_notebook.py
 uv run jupyter nbconvert --to notebook --execute --inplace notebooks/02_model_comparison.ipynb
-uv run pytest                                                                                # 41 tests
+uv run pytest                                                                                # 45 tests
 ```
 
 ---
@@ -448,7 +453,7 @@ Paper conclusion (§5.3): **QLIKE loss + OLS initialization** is the most reliab
 | RV | 5-min, 78 returns | Oxford-Man rv5_ss | 5-min RTH, 78 returns |
 | Horizons | 1, 5, 22, 44 | 1 | 1, 5, 22 |
 | Split | 80/10/10, no re-estimation | 15 × (4y train, 1y test) | event cutoffs, refit on train+val, frozen |
-| Metrics | MSE, MAE, QLIKE, MCS | MSE, MAE, QLIKE | QLIKE, MSE, lead time, onset, alarm skill (Peirce), DM |
+| Metrics | MSE, MAE, QLIKE, MCS | MSE, MAE, QLIKE | QLIKE (primary), variance-scale MSE (secondary), MAE, lead time, onset, alarm skill (Peirce), DM |
 
 Mamba follows Gu & Dao (2023); there is no realized-volatility reference implementation, so the design in §6.5 is this study's own.
 
@@ -458,11 +463,15 @@ Mamba follows Gu & Dao (2023); there is no realized-volatility reference impleme
 
 All metrics are computed per event, per window (`pre_event`, `event`, `post_event`, `calm`) and per horizon, from the shared forecast files. Tables and figures go to `reports/eval/`.
 
-1. **Accuracy.** QLIKE (Patton 2011; `models/common.py::qlike`) and MSE on both the variance and log scales; MAE. QLIKE penalizes under-prediction heavily, which suits a risk question.
-2. **Early-warning lift.** forecast_var ÷ the model's own mean `train_tail` forecast. Report the first date the ratio crosses fixed thresholds (e.g. 1.5×, 2×) and the lead time in trading days relative to the peak.
+1. **Accuracy.** Only QLIKE and variance-scale MSE rank forecasts correctly when RV is a noisy proxy for true variance (Patton 2011), and both score the smeared `forecast_var`.
+   - **QLIKE** (`models/common.py::qlike`) is the **primary** metric. It penalizes under-prediction heavily, which suits a risk question.
+   - **Variance-scale MSE** (`mse_var`) is the **secondary** metric, in (daily %²)², i.e. variance × 10⁴. No model trains on it, so it is the neutral second opinion. It also gets a DM table (`dm_vs_benchmark(loss="mse_var")`) and a ratio to HAR-base (`mse_var_rel`). Crash days dominate it, so it is reported per window and never pooled.
+   - **Variance-scale MAE** (`mae_var`, daily %²) is there only for comparability with Teller et al. and Reisenhofer et al. It is not robust and not used for ranking.
+   - **Log-scale MSE** (`mse_log`) is a diagnostic only. It is not robust, and it favours the log models: their unsmeared `forecast_log` ≈ E[ln RV], while HARNet's ln(forecast_var) sits above it.
+2. **Early-warning lift.** forecast_var ÷ the long-run mean RV of the event's training sample ("normal", common to all models; default `basis="longrun"`). The originally planned baseline, the model's own mean `train_tail` forecast (`basis="tail"`), is kept as a secondary view because it is degenerate for 2022. Report the first date the ratio crosses fixed thresholds (e.g. 1.5×, 2×) and the lead time in trading days relative to the peak.
 3. **Under-prediction at onset / continuation.** Over the first 10 event days: coverage = forecast ÷ realized (forward), escalation = forecast ÷ trailing 5-day RV (> 1 means the model expects worse to come), and cumulative shortfall. For 2022, tracking over the whole event window: QLIKE, mean ln(forecast/realized), share of days under-predicted.
-4. **False alarms / alarm skill (decided).** alarm = lift ≥ τ, stress = realized lift ≥ τ (realized ÷ its own train-tail level), over all out-of-sample days including a **calm window** after each event (§5.1). Reported: hit rate, false-alarm rate, Peirce skill score (= hit − false alarm; an always-alarm model scores 0), alarm-to-stress ratio, and calm-window bias.
-5. **Significance.** Diebold–Mariano tests on QLIKE vs HAR-base, with Newey–West variance (built). Model confidence set (Hansen, Lunde & Nason 2011; `arch.bootstrap.MCS`) is still optional.
+4. **False alarms / alarm skill (decided).** alarm = lift ≥ τ, stress = realized lift ≥ τ (realized ÷ the same long-run normal), over all out-of-sample days including a **calm window** after each event (§5.1). Reported: hit rate, false-alarm rate, Peirce skill score (= hit − false alarm; an always-alarm model scores 0), alarm-to-stress ratio, and calm-window bias.
+5. **Significance.** Diebold–Mariano tests on QLIKE and on variance-scale MSE vs HAR-base, with Newey–West variance (built). Model confidence set (Hansen, Lunde & Nason 2011; `arch.bootstrap.MCS`) is still optional.
 6. **Optional VaR backtest.** 1-day VaR exceedances with Kupiec/Christoffersen tests (not built).
 
 **Interpretation caveat.** For pre-event rows near the peak, the h = 22 target window already reaches into the event (e.g. a forecast made on 2020-02-10 targets mean RV through mid-March). "Realized" in the pre-event window is therefore partly event volatility at long horizons. Lead-time analysis should use the forecast series itself (lift and threshold crossings), not only forecast-vs-realized loss.
@@ -586,7 +595,7 @@ HARNet and GARCH (level models) have no S. Their 2022 results changed only throu
 | 1 | **XGBoost tree ceiling (COVID h5/h22)** | Run `--space wide --booster gbtree --tag wide` and compare ceilings and event forecasts before drawing conclusions. Also report the ceiling as a finding about the paper's search space. |
 | 2 | ~~Smearing with an event inside validation (2022)~~ **Decided 2026-10-08** | 2022 now trains through 2020-12 and validates on 2021-01 → 2021-09 (§5.1, §9d). Post-2023 validation was rejected as look-ahead, and it would overlap the calm false-alarm window. Earlier options considered: | Options: COVID-free validation (`--val-window 2018-01-02 2020-01-31 --tag covidfreeval`); smearing from refit-sample (in-sample) residuals; a robust/trimmed smearing estimator; or report `forecast_var_naive` alongside. The same choice must apply to HAR and Multi-Transformer. |
 | 3 | ~~HARNet horizon adaptation~~ **Decided** | Direct forward-mean targets `rv_h{h}`, with the OLS HAR baseline fit on the same target |
-| 4 | ~~HARNet training length~~ **Decided** | Iteration count chosen on validation QLIKE (0–40,000, eval every 250, patience 40), then refit on train + val for that many iterations |
+| 4 | ~~HARNet training length~~ **Decided** | Iteration count chosen on validation QLIKE (0–100,000 per `configs/harnet.yaml`, eval every 250, patience 40; the original 40,000 cap was binding), then refit on train + val for that many iterations |
 | 5 | HARNet monthly period 20 vs 22 | Architectural constraint; document it. HAR(1,5,20) inside HARNet is its initialization only. |
 | 6 | ~~Multi-Transformer design~~ **Superseded** | Replaced by Mamba + LSTM control (§6.5) |
 | 7 | ~~Mamba GPU grid~~ **Done** | Ran 2026-10-06. After any re-run, re-execute the notebook: it shows results from the last time it ran |
@@ -613,7 +622,7 @@ HARNet and GARCH (level models) have no S. Their 2022 results changed only throu
 | Smearing (S) | Duan (1983) factor mean(exp(residual)) to undo log-retransformation bias |
 | Ceiling | Largest value a tree ensemble can output |
 | Cell | One (event, feature set, horizon, variant) model fit |
-| Lift | Forecast ÷ the model's own pre-cutoff average forecast level |
+| Lift | Forecast ÷ the long-run mean RV of the training sample ("normal"); the own-train-tail baseline is a secondary view |
 
 ---
 
@@ -641,3 +650,63 @@ HARNet and GARCH (level models) have no S. Their 2022 results changed only throu
 - Chen, T., & Guestrin, C. (2016). XGBoost: A scalable tree boosting system. *KDD*.
 - Bergstra, J., Bardenet, R., Bengio, Y., & Kégl, B. (2011). Algorithms for hyper-parameter optimization. *NeurIPS*. (TPE)
 - Vaswani, A., et al. (2017). Attention is all you need. *NeurIPS*.
+
+---
+
+## 13. Task: add variance-scale MSE (and MAE) to the evaluation (added 2026-10-08)
+
+**Status: done 2026-10-08.** `accuracy_table` (`mse_var`, `mae_var`, `mse_var_rel`), `tracking_table` (`mse_var`), `dm_vs_benchmark(loss=...)`, `tests/test_evaluation.py`, notebook §2/§4/§5 rebuilt and re-executed (Mamba 2022 rows included). `dm_test` now returns (0, 1) when the loss differential is identically zero. Outputs: `reports/eval/accuracy_by_window.csv`, `dm_event_vs_har_mse_var.csv`.
+
+**Why.** Patton (2011, Prop. 2 and Table 1) shows that only two common losses rank forecasts correctly when RV is used as a noisy proxy for true variance: QLIKE and MSE on the variance scale. §8 lists variance-scale MSE, but `evaluation.py` never computes it. `accuracy_table` currently reports QLIKE, log-scale MSE (`mse_log`) and log bias only. The thesis will report:
+
+| Loss | Role in the thesis |
+|---|---|
+| QLIKE | Primary metric (unchanged) |
+| MSE, variance scale | **Secondary metric (to add)**: robust, and it is no model's training loss, so it is the neutral second opinion |
+| MAE, variance scale | **To add**, for comparability with Teller et al. and Reisenhofer et al. only (not robust, not used for ranking) |
+| MSE, log scale | Keep, but as a diagnostic only. It is not robust, and it favours the log models: their `forecast_log` is the unsmeared ŷ ≈ E[ln RV], which is exactly what this loss rewards, while HARNet's `forecast_log` = ln(forecast_var) sits above E[ln RV] |
+
+**No model needs to be re-trained or re-run.** Every forecast file (`data/processed/forecasts/{event}/{model}.parquet`) already holds `forecast_var` (smeared for log models, seed-averaged where applicable) and `realized_var`. The new losses are pure post-processing in `evaluation.py`. Saved model weights are not needed.
+
+**Steps**
+
+1. **Helpers in `src/volforecast/evaluation.py`**, next to `_qlike`:
+   ```python
+   VAR_SCALE = 1e4   # daily decimal variance -> daily %^2, so squared errors are not ~1e-8
+
+   def _se_var(r, f):
+       return ((r - f) * VAR_SCALE) ** 2
+
+   def _ae_var(r, f):
+       return np.abs(r - f) * VAR_SCALE
+   ```
+   Always score `forecast_var` (the smeared, back-transformed forecast), never `forecast_var_naive`. Scaling doesn't change rankings or DM statistics; state the unit (daily %², squared) in table captions.
+
+2. **`accuracy_table`**: add the columns `mse_var` and `mae_var` (means of the two helpers) alongside `qlike`, `mse_log` and `bias_log`, with the same filters (`target_complete`, `sample` in `OOS`) and grouping (event, family, fs, model, h, sample). Results stay per window (pre_event, event, post_event, calm). Variance-scale MSE is dominated by crash days, so it must not be pooled across windows.
+
+3. **`tracking_table`**: add `mse_var` next to `qlike`.
+
+4. **`dm_vs_benchmark`**: add an argument `loss: str = "qlike"` accepting `"qlike"` or `"mse_var"`. Compute the chosen per-day loss and run `dm_test` exactly as now (Newey–West, lag h − 1, benchmark HAR-base). Rename the output columns generically (`loss_mean`, `loss_mean_bench`, plus a `loss` column) or keep `qlike`/`qlike_har_base` for `loss="qlike"` so existing notebook cells keep working.
+
+5. **Optional relative column:** `mse_var_rel` = model `mse_var` ÷ HAR-base `mse_var` within the same (event, h, sample). This makes the magnitudes readable across horizons.
+
+6. **Tests** (`tests/`, a new `test_evaluation.py` or the existing adapter tests):
+   - on a small hand-made forecast frame, `accuracy_table` returns `mse_var == mean(((r - f) * 1e4) ** 2)` and the matching `mae_var`;
+   - `dm_vs_benchmark(loss="mse_var")` gives a DM statistic of 0 when a model's forecasts equal the benchmark's;
+   - `dm_vs_benchmark()` with no `loss` argument reproduces the current QLIKE output.
+
+7. **Notebook**: in `scripts/build_comparison_notebook.py`, add `mse_var` (and `mae_var`) to the accuracy and tracking tables, plus a second DM table with `loss="mse_var"`. Rebuild and re-execute:
+   ```bash
+   uv run python scripts/build_comparison_notebook.py
+   uv run jupyter nbconvert --to notebook --execute --inplace notebooks/02_model_comparison.ipynb
+   uv run pytest
+   ```
+   If the Mamba 2022 re-run has not finished, note that its rows are pending.
+
+8. **Documentation fixes in this file while you are here:**
+   - §8 item 1: mark log-scale MSE as diagnostic only, variance-scale MSE as secondary, MAE as comparability only.
+   - §8 item 2 still describes lift as ÷ the model's own `train_tail` forecast; the default is now the long-run training-sample RV (status section, point 3). Update it.
+   - §10 decision 4 still says 0–40,000 HARNet iterations; the cap is 100,000 (`configs/harnet.yaml`).
+   - §11 Glossary, "Lift": same update as §8 item 2.
+
+**Done when:** `accuracy_table`, `tracking_table` and both DM tables show variance-scale MSE (and MAE) for every model, event, horizon and window; tests pass; the notebook is re-executed; §8, §10 and §11 match the code.

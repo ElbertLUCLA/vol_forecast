@@ -55,6 +55,11 @@ day by day with live inputs. Every model is scored from the same forecast files
 - **escalation** = forecast of the next h days ÷ RV over the last 5 days. Above 1 means the model expects things to get worse.
 - **coverage** = forecast ÷ realized (forward). 1 = right level; below 1 = under-prediction.
 - **Peirce skill** = hit rate − false-alarm rate. A model that always alarms scores 0, however many crashes it "catches".
+- **Losses.** Only QLIKE and MSE on the variance scale rank forecasts correctly when noisy RV stands in for the true
+  variance (Patton 2011). **QLIKE is the primary loss and variance-scale MSE the secondary one.** No model trains on the
+  variance-scale MSE, so it gives a neutral second opinion. Both losses score the smeared, back-transformed `forecast_var`.
+  Variance-scale MAE is reported only for comparability with Teller et al. and Reisenhofer et al. Log-scale MSE is a
+  diagnostic only: it favours the unsmeared log models.
 """)
 
 code(r"""
@@ -101,17 +106,39 @@ display(t.loc[[f for f in E.FAMILY_ORDER if f in t.index]].style.format("{:.1f}"
 md(r"""
 ## 2. Out-of-sample accuracy by window
 
-Mean QLIKE per window, out of sample (the frozen model's live forecasts). `pre_event`/`event`/`post_event` are
+Mean loss per window, out of sample (the frozen model's live forecasts). `pre_event`/`event`/`post_event` are
 the drawdown windows; `calm` is the quiet stretch afterwards.
+
+- **QLIKE** (primary).
+- **MSE, variance scale** (secondary), in (daily %²)², i.e. squared errors of variance × 10⁴. It is dominated by
+  the largest crash days, so compare models only within a window, never pooled across windows. The relative table
+  divides by HAR-base in the same event, horizon and window (< 1 = better than HAR).
+- **MAE, variance scale**, in daily %²: comparability with the papers only, not used for ranking.
 """)
 code(r"""
 acc = E.accuracy_table(df)
 acc.to_csv(out_dir / "accuracy_by_window.csv", index=False)
+
+def window_table(event, value):
+    t = acc[acc["event"] == event].pivot_table(index=["family", "fs"], columns=["h", "sample"], values=value)
+    return t.reindex(columns=pd.MultiIndex.from_product([[1, 5, 22], E.OOS]), fill_value=np.nan)
+
 for event in ("covid", "bear2022"):
-    t = acc[acc["event"] == event].pivot_table(index=["family", "fs"], columns=["h", "sample"], values="qlike")
-    t = t.reindex(columns=pd.MultiIndex.from_product([[1, 5, 22], E.OOS]), fill_value=np.nan)
-    display(t.style.format("{:.3f}").background_gradient(axis=0, cmap="Greens_r")
+    display(window_table(event, "qlike").style.format("{:.3f}").background_gradient(axis=0, cmap="Greens_r")
             .set_caption(f"{event}: QLIKE by horizon and window (lower is better)"))
+""")
+code(r"""
+for event in ("covid", "bear2022"):
+    display(window_table(event, "mse_var").style.format("{:.3g}").background_gradient(axis=0, cmap="Greens_r")
+            .set_caption(f"{event}: MSE, variance scale, (daily %²)² (lower is better)"))
+    display(window_table(event, "mse_var_rel").style.format("{:.2f}")
+            .background_gradient(axis=None, cmap="RdYlGn_r", vmin=0.5, vmax=1.5)
+            .set_caption(f"{event}: MSE, variance scale, ÷ HAR-base (< 1 = better than HAR)"))
+""")
+code(r"""
+for event in ("covid", "bear2022"):
+    display(window_table(event, "mae_var").style.format("{:.3g}").background_gradient(axis=0, cmap="Greens_r")
+            .set_caption(f"{event}: MAE, variance scale, daily %² (comparability only; not robust)"))
 """)
 
 md(r"""
@@ -165,7 +192,7 @@ code(r"""
 onset = E.onset_table(df, "covid", n_days=10)
 onset.to_csv(out_dir / "covid_onset.csv", index=False)
 display(onset[onset["fs"].isin(["ext", "-"])].sort_values(["h", "coverage_mean"], ascending=[True, False])
-        .set_index(["h", "family"]).drop(columns=["fs"]).style.format("{:.3g}"))
+        .set_index(["h", "family"]).drop(columns=["fs", "model"]).style.format("{:.3g}"))
 fig, axes = plt.subplots(1, 2, figsize=(12, 3.8))
 P.bar_by_family(onset, "escalation_mean", ax=axes[0], ref=1.0, title="Escalation in the first 10 event days (> 1 = expects worse)")
 P.bar_by_family(onset, "coverage_mean", ax=axes[1], ref=1.0, title="Coverage of what came next (1 = right level)")
@@ -195,10 +222,12 @@ code(r"""
 track = E.tracking_table(df, "bear2022")
 track.to_csv(out_dir / "bear2022_tracking.csv", index=False)
 display(track[track["fs"].isin(["ext", "-"])].sort_values(["h", "qlike"]).set_index(["h", "family"])
-        .drop(columns=["fs"]).style.format("{:.3f}"))
-fig, axes = plt.subplots(1, 2, figsize=(12, 3.8))
+        .drop(columns=["fs", "model"]).style.format("{:.3f}").format("{:.3g}", subset=["mse_var"])
+        .set_caption("2022 event window; mse_var in (daily %²)²"))
+fig, axes = plt.subplots(1, 3, figsize=(16, 3.8))
 P.bar_by_family(track, "qlike", ax=axes[0], title="2022 event window: QLIKE (lower is better)")
-P.bar_by_family(track, "bias_log", ax=axes[1], ref=0.0, title="2022 event window: mean ln(forecast / realized)")
+P.bar_by_family(track, "mse_var", ax=axes[1], title="2022 event window: MSE, variance scale (lower is better)")
+P.bar_by_family(track, "bias_log", ax=axes[2], ref=0.0, title="2022 event window: mean ln(forecast / realized)")
 fig.tight_layout(); fig.savefig(out_dir / "bear2022_tracking.png", dpi=150)
 """)
 
@@ -240,14 +269,16 @@ fig.tight_layout(); fig.savefig(out_dir / "calm_bias.png", dpi=150)
 md(r"""
 ### Is the event-window advantage statistically significant?
 
-Diebold–Mariano tests on QLIKE against the HAR (base) benchmark, event window, with a Newey–West variance (lag h − 1).
+Diebold–Mariano tests against the HAR (base) benchmark, event window, with a Newey–West variance (lag h − 1),
+on each of the two robust losses: QLIKE (primary) and variance-scale MSE (secondary).
 A negative statistic means the model's loss is lower than HAR's.
 """)
 code(r"""
-dm = E.dm_vs_benchmark(df, "HAR", segments=("event",))
-dm.to_csv(out_dir / "dm_event_vs_har.csv", index=False)
-d = dm[dm["fs"].isin(["ext", "-"])].pivot_table(index="family", columns=["event", "h"], values=["dm_stat", "p_value"])
-display(d.style.format("{:.2f}"))
+for loss, label in (("qlike", "QLIKE"), ("mse_var", "MSE, variance scale")):
+    dm = E.dm_vs_benchmark(df, "HAR", segments=("event",), loss=loss)
+    dm.to_csv(out_dir / ("dm_event_vs_har.csv" if loss == "qlike" else f"dm_event_vs_har_{loss}.csv"), index=False)
+    d = dm[dm["fs"].isin(["ext", "-"])].pivot_table(index="family", columns=["event", "h"], values=["dm_stat", "p_value"])
+    display(d.style.format("{:.2f}").set_caption(f"DM vs HAR-base, event window: {label}"))
 """)
 
 md(r"""

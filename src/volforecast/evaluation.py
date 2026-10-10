@@ -111,19 +111,49 @@ def add_escalation(df: pd.DataFrame, features: pd.DataFrame) -> pd.DataFrame:
 
 # ---------------------------------------------------------------- accuracy
 
+VAR_SCALE = 1e4   # daily decimal variance -> daily %^2, so squared errors are not ~1e-8
+
+
 def _qlike(r, f):
     x = r / f
     return x - np.log(x) - 1.0
 
 
+def _se_var(r, f):
+    """Squared error on the variance scale, in (daily %^2)^2. Robust to a noisy RV proxy (Patton 2011)."""
+    return ((r - f) * VAR_SCALE) ** 2
+
+
+def _ae_var(r, f):
+    """Absolute error on the variance scale, in daily %^2. Not robust; for comparability with the papers only."""
+    return np.abs(r - f) * VAR_SCALE
+
+
+LOSSES = {"qlike": _qlike, "mse_var": _se_var}
+
+
 def accuracy_table(df: pd.DataFrame) -> pd.DataFrame:
-    """QLIKE, log-MSE and bias per (event, model, h, segment), complete targets only."""
+    """Losses and bias per (event, model, h, segment), complete targets only.
+
+    qlike (primary) and mse_var (secondary) are the two losses robust to the noisy RV proxy (Patton 2011);
+    both score forecast_var, the smeared back-transformed forecast. mae_var is for comparability with
+    Teller et al. / Reisenhofer et al. only, and mse_log is a diagnostic (it favours the unsmeared log models).
+    mse_var_rel = mse_var / HAR-base mse_var in the same (event, h, sample). Never pool mse_var across
+    windows: it is dominated by crash days.
+    """
     d = df[df["target_complete"] & df["sample"].isin(OOS)].copy()
     d["qlike"] = _qlike(d["realized_var"], d["forecast_var"])
+    d["se_var"] = _se_var(d["realized_var"], d["forecast_var"])
+    d["ae_var"] = _ae_var(d["realized_var"], d["forecast_var"])
     d["se_log"] = (d["realized_log"] - d["forecast_log"]) ** 2
     g = d.groupby(["event", "family", "fs", "model", "h", "sample"])
-    out = g.agg(qlike=("qlike", "mean"), mse_log=("se_log", "mean"), bias_log=("log_ratio", "mean"),
+    out = g.agg(qlike=("qlike", "mean"), mse_var=("se_var", "mean"), mae_var=("ae_var", "mean"),
+                mse_log=("se_log", "mean"), bias_log=("log_ratio", "mean"),
                 n=("qlike", "size")).reset_index()
+    key = ["event", "h", "sample"]
+    bench = out.loc[(out["family"] == "HAR") & (out["fs"] == "base"), key + ["mse_var"]]
+    out = out.merge(bench.rename(columns={"mse_var": "_bench"}), on=key, how="left")
+    out["mse_var_rel"] = out["mse_var"] / out.pop("_bench")
     return out
 
 
@@ -139,25 +169,35 @@ def dm_test(loss_a: np.ndarray, loss_b: np.ndarray, h: int) -> tuple[float, floa
     var = dc @ dc / n
     for k in range(1, lag + 1):
         var += 2 * (1 - k / (lag + 1)) * (dc[k:] @ dc[:-k]) / n
+    if var <= 0:  # identical losses on every day: no difference to test
+        return 0.0, 1.0
     stat = dbar / np.sqrt(var / n)
     return float(stat), float(2 * (1 - stats.norm.cdf(abs(stat))))
 
 
-def dm_vs_benchmark(df: pd.DataFrame, benchmark: str = "HAR", segments=("event",)) -> pd.DataFrame:
-    """DM test on QLIKE of every model against the benchmark family (same event, h, feature set if any)."""
+def dm_vs_benchmark(df: pd.DataFrame, benchmark: str = "HAR", segments=("event",),
+                    loss: str = "qlike") -> pd.DataFrame:
+    """DM test of every model against the benchmark family's base model (same event, h).
+
+    loss: "qlike" (default) or "mse_var", the two losses robust to the noisy RV proxy. The mean losses
+    are in columns `{loss}` and `{loss}_har_base`, so the default output is unchanged apart from the
+    added `loss` column.
+    """
+    if loss not in LOSSES:
+        raise ValueError(f"loss must be one of {sorted(LOSSES)}, got {loss!r}")
     d = df[df["target_complete"] & df["sample"].isin(segments)].copy()
-    d["qlike"] = _qlike(d["realized_var"], d["forecast_var"])
+    d[loss] = LOSSES[loss](d["realized_var"], d["forecast_var"])
     rows = []
     for (event, h), g in d.groupby(["event", "h"]):
-        bench = g[(g["family"] == benchmark) & (g["fs"] == "base")].set_index("date")["qlike"]
+        bench = g[(g["family"] == benchmark) & (g["fs"] == "base")].set_index("date")[loss]
         for model, gm in g.groupby("model"):
-            a = gm.set_index("date")["qlike"].reindex(bench.index).dropna()
+            a = gm.set_index("date")[loss].reindex(bench.index).dropna()
             if gm["family"].iloc[0] == benchmark and gm["fs"].iloc[0] == "base":
                 continue
             stat, p = dm_test(a.to_numpy(), bench.loc[a.index].to_numpy(), h)
             rows.append({"event": event, "h": h, "model": model, "family": gm["family"].iloc[0],
-                         "fs": gm["fs"].iloc[0], "qlike": a.mean(), "qlike_har_base": bench.mean(),
-                         "dm_stat": stat, "p_value": p})
+                         "fs": gm["fs"].iloc[0], "loss": loss, loss: a.mean(),
+                         f"{loss}_har_base": bench.mean(), "dm_stat": stat, "p_value": p})
     return pd.DataFrame(rows)
 
 
@@ -203,8 +243,9 @@ def tracking_table(df: pd.DataFrame, event: str) -> pd.DataFrame:
     """Whole event window: how well does each model stay on the realized level?"""
     d = df[(df["event"] == event) & (df["sample"] == "event") & df["target_complete"]].copy()
     d["qlike"] = _qlike(d["realized_var"], d["forecast_var"])
+    d["se_var"] = _se_var(d["realized_var"], d["forecast_var"])
     g = d.groupby(["family", "fs", "model", "h"])
-    return g.agg(qlike=("qlike", "mean"), bias_log=("log_ratio", "mean"),
+    return g.agg(qlike=("qlike", "mean"), mse_var=("se_var", "mean"), bias_log=("log_ratio", "mean"),
                  share_under=("coverage", lambda s: float((s < 1).mean())),
                  share_lift_2=("lift", lambda s: float((s >= 2.0).mean())),
                  coverage_median=("coverage", "median")).reset_index()
@@ -258,6 +299,7 @@ def training_summary(models_root: str | Path | None = None) -> pd.DataFrame:
     # The random walk is the same benchmark for every model with the same event and horizon.
     out["val_qlike_rw"] = out.groupby(["event", "h"])["val_qlike_rw"].transform("max")
     return out[[c for c in cols if c in out]].sort_values(["event", "h", "family", "model"])
+
 
 
 # ---------------------------------------------------------------- smearing finding (2022 validation block)
