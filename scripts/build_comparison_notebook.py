@@ -119,6 +119,7 @@ the drawdown windows; `calm` is the quiet stretch afterwards.
 code(r"""
 acc = E.accuracy_table(df)
 acc.to_csv(out_dir / "accuracy_by_window.csv", index=False)
+E.mean_event_forecast(df).to_csv(out_dir / "mean_event_forecast.csv", index=False)
 
 def window_table(event, value):
     t = acc[acc["event"] == event].pivot_table(index=["family", "fs"], columns=["h", "sample"], values=value)

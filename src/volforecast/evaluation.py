@@ -163,6 +163,30 @@ def accuracy_table(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def mean_event_forecast(df: pd.DataFrame) -> pd.DataFrame:
+    """Mean forecast vs realized volatility over the event window (peak -> trough), complete targets only.
+
+    Same window as accuracy_table's "event" sample (assigned by forecast date). Two annualized-vol summaries:
+      mean_*_vol_pct     = 100 * sqrt(252 * mean(var))   (vol of the mean variance)
+      mean_of_vol_*_pct  = 100 * mean(sqrt(252 * var))   (mean of daily vols; lower, by Jensen)
+    ratio = mean(forecast_var) / mean(realized_var); 1 = right average level.
+    """
+    d = df[df["target_complete"] & (df["sample"] == "event")].copy()
+    d["_fc_vol"] = np.sqrt(252 * d["forecast_var"])
+    d["_rv_vol"] = np.sqrt(252 * d["realized_var"])
+    g = d.groupby(["event", "family", "model", "featureset", "h"])
+    out = g.agg(n_days=("forecast_var", "size"), _fc=("forecast_var", "mean"), _rv=("realized_var", "mean"),
+                mean_of_vol_forecast_pct=("_fc_vol", "mean"),
+                mean_of_vol_realized_pct=("_rv_vol", "mean")).reset_index()
+    out["mean_forecast_vol_pct"] = 100 * np.sqrt(252 * out["_fc"])
+    out["mean_realized_vol_pct"] = 100 * np.sqrt(252 * out["_rv"])
+    out[["mean_of_vol_forecast_pct", "mean_of_vol_realized_pct"]] *= 100
+    out["ratio"] = out.pop("_fc") / out.pop("_rv")
+    cols = ["event", "family", "model", "featureset", "h", "n_days", "mean_forecast_vol_pct",
+            "mean_realized_vol_pct", "mean_of_vol_forecast_pct", "mean_of_vol_realized_pct", "ratio"]
+    return out[cols]
+
+
 def dm_test(loss_a: np.ndarray, loss_b: np.ndarray, h: int) -> tuple[float, float]:
     """Diebold-Mariano with a Newey-West variance (lag h-1). Negative stat = A has lower loss."""
     from scipy import stats
